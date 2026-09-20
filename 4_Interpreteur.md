@@ -8,9 +8,9 @@ author: Johann Philippe
 > C'est le chapitre qui relie tout : mémoire, ASM et SIMD s'y retrouvent dans la conception d'une petite machine virtuelle et de son assembleur maison — exactement ce que vous allez construire pour le projet.
 > Le code est dans [code/04_interpreteur](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/04_interpreteur) :
 > - `showdown.cpp` *(distribué comme corrigé après les défis 2 et 5, voir exercices)* : le même programme en tree-walking, stack VM et register VM, avec 3 techniques de dispatch ;
-> - [batch_demo.cpp](code/04_interpreteur/batch_demo.cpp) : interprétation par entité vs par lot (SIMD) ;
+> - [batch_demo.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/04_interpreteur/batch_demo.cpp) : interprétation par entité vs par lot (SIMD) ;
 > - `vektor/` : **l'interpréteur de référence complet** (lexer, parser Pratt, sema typée, compilateur vers une VM à registres typés `int64` / `__m128`, assembleur et désassembleur maison, tests). Certains de ses fichiers vous seront distribués **par morceaux**, au fil des exercices, pour servir de corrigés partiels.
-> Exercices : [exercices/4_Interpreteur.md](exercices/4_Interpreteur.md).
+> Des exercices accompagnent ce chapitre (distribués séparément en cours).
 
 ## Objectifs de la partie
 
@@ -101,7 +101,7 @@ Sortie réelle de `vektor tokens` :
   1:16  identifiant    'vec4'
 ```
 
-**Lien SIMD** : sur de gros fichiers, sauter les espaces, les commentaires et les identifiants se vectorise (voir [scan_text.cpp](code/03_simd/scan_text.cpp), et simdjson). Pour des scripts de jeu de quelques Ko, le lexer n'est jamais le goulot. C'est un bon exercice, mais ce n'est pas une priorité.
+**Lien SIMD** : sur de gros fichiers, sauter les espaces, les commentaires et les identifiants se vectorise (voir [scan_text.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/scan_text.cpp), et simdjson). Pour des scripts de jeu de quelques Ko, le lexer n'est jamais le goulot. C'est un bon exercice, mais ce n'est pas une priorité.
 
 ---
 
@@ -758,7 +758,7 @@ Ce qui fait le lien avec **tout** le cours. Chaque point est une piste de projet
 
 ## L'exécution par lot : la démo qui relie tout
 
-[batch_demo.cpp](code/04_interpreteur/batch_demo.cpp). Un script de comportement de particule (17 instructions), exécuté sur **100 000 entités** pendant 100 frames :
+[batch_demo.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/04_interpreteur/batch_demo.cpp). Un script de comportement de particule (17 instructions), exécuté sur **100 000 entités** pendant 100 frames :
 
 ```
 (a) interprétation par entité             234.971 ms     17 x 100 000 dispatches par frame

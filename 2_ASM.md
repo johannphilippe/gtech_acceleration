@@ -6,7 +6,7 @@ author: Johann Philippe
 # 2. Assembleur x86-64
 
 > Vous savez déjà écrire du C++, mais probablement pas une ligne d'assembleur. C'est le sujet de ce chapitre : comprendre ce qu'un CPU exécute *réellement*, écrire quelques fonctions en assembleur x86-64, et apprendre à lire ce que produit MSVC. C'est aussi le chapitre-pont : les registres et la pile vus ici sont directement ceux que vous retrouverez dans le SIMD (partie 3) et dans la VM à registres que vous allez construire (partie 4).
-> Code de démonstration : [code/02_asm](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/02_asm). Exercices : [exercices/2_ASM.md](exercices/2_ASM.md). Tous les fichiers `.asm` ont été assemblés et testés : les fonctions sont appelées depuis du C++ avec des tests unitaires. Les extraits « sortie MSVC » viennent du vrai compilateur MSVC (v19.latest x64, via Compiler Explorer).
+> Code de démonstration : [code/02_asm](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/02_asm). Des exercices accompagnent ce chapitre (distribués séparément en cours). Tous les fichiers `.asm` ont été assemblés et testés : les fonctions sont appelées depuis du C++ avec des tests unitaires. Les extraits « sortie MSVC » viennent du vrai compilateur MSVC (v19.latest x64, via Compiler Explorer).
 
 ## Ce que vous devez savoir faire à la fin
 
@@ -455,7 +455,7 @@ END
 
 ## Exemples commentés (testés)
 
-Fichier complet : [code/02_asm/asm_basics.asm](code/02_asm/asm_basics.asm), appelé depuis [main.cpp](code/02_asm/main.cpp).
+Fichier complet : [code/02_asm/asm_basics.asm](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/02_asm/asm_basics.asm), appelé depuis [main.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/02_asm/main.cpp).
 
 ### Leaf function : addition
 
@@ -760,7 +760,7 @@ Un vrai assembleur choisirait `48 8B 42 18` avec un disp8, plus court. Un JIT é
 
 ## Démonstration : un « template JIT » en 150 lignes
 
-[code/02_asm/jit.cpp](code/02_asm/jit.cpp) prend **le même bytecode** que `asm_vm_run` et :
+[code/02_asm/jit.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/02_asm/jit.cpp) prend **le même bytecode** que `asm_vm_run` et :
 
 1. l'**interprète** avec un `switch` en C++ ;
 2. le **compile** en x86-64 en émettant les octets à la main : chaque instruction VM devient un « template » de 1 à 3 instructions machine, et les sauts sont résolus par **backpatching** ;

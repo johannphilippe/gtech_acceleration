@@ -79,12 +79,12 @@ author: Johann Philippe
 
 | Séance | Contenu | Exercices (briques) |
 |--------|-------------------|--------------------------|
-| **S1** Mémoire | Partie 1, sections 1.1 à 1.6 : histoire, hiérarchie, caches, alignement, DOD | Défis 1, 2, 3 (voir [exercices/1_Memoire.md](exercices/1_Memoire.md)) |
-| **S2** ASM 1 | Partie 2, sections 2.1 à 2.3 et 2.6 : modèle d'exécution, registres, instructions, lecture de `/Od` et `/O2` | Défis 1, 2 (début) (voir [exercices/2_ASM.md](exercices/2_ASM.md)) |
+| **S1** Mémoire | Partie 1, sections 1.1 à 1.6 : histoire, hiérarchie, caches, alignement, DOD | Défis 1, 2, 3 |
+| **S2** ASM 1 | Partie 2, sections 2.1 à 2.3 et 2.6 : modèle d'exécution, registres, instructions, lecture de `/Od` et `/O2` | Défis 1, 2 (début) |
 | **S3** ASM 2 | Partie 2, sections 2.4, 2.5, 2.7, 2.8 : pile, convention d'appel, unwind, jump tables, encodage, ARM64 | Défis 3, 4 |
-| **S4** SIMD 1 | Partie 3, sections 3.1 à 3.4 : histoire, auto-vectorisation, SSE, masques, tail | voir [exercices/3_SIMD.md](exercices/3_SIMD.md) |
-| **S5** SIMD 2 | Partie 3, sections 3.5 à 3.8 : AVX2, lanes, AVX-512, dispatch, benchmarks | voir [exercices/3_SIMD.md](exercices/3_SIMD.md) |
-| **S6** Interpréteur | Partie 4, sections 4.1 à 4.8 : chaîne, Pratt, stack vs registres, dispatch, batch | Défi 1 (voir [exercices/4_Interpreteur.md](exercices/4_Interpreteur.md)) ; **lancement du projet** (groupes, thèmes) |
+| **S4** SIMD 1 | Partie 3, sections 3.1 à 3.4 : histoire, auto-vectorisation, SSE, masques, tail | (exercices distribués en cours) |
+| **S5** SIMD 2 | Partie 3, sections 3.5 à 3.8 : AVX2, lanes, AVX-512, dispatch, benchmarks | (exercices distribués en cours) |
+| **S6** Interpréteur | Partie 4, sections 4.1 à 4.8 : chaîne, Pratt, stack vs registres, dispatch, batch | Défi 1 ; **lancement du projet** (groupes, thèmes) |
 
 ## Semaines 2 et 3 : projet (16 h par semaine en présentiel + temps libre)
 

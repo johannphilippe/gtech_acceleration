@@ -6,7 +6,7 @@ author: Johann Philippe
 # 3. SIMD : Single Instruction, Multiple Data
 
 > Après la mémoire et l'assembleur, la troisième brique matérielle du cours : faire calculer le CPU sur plusieurs valeurs **en une seule instruction**. On commence toujours par regarder ce que le compilateur sait faire **seul** (l'auto-vectorisation) avant d'écrire quoi que ce soit à la main — sinon vous risquez d'écrire du SIMD plus lent que ce que MSVC aurait produit tout seul.
-> Code de démonstration : [code/03_simd](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/03_simd). Exercices : [exercices/3_SIMD.md](exercices/3_SIMD.md). Les benchmarks ont été mesurés sur un Ryzen 9 8940HX (Zen 4, AVX-512), avec g++ 13 en `-O2`. Tous les fichiers `.cpp` **compilent aussi avec MSVC** (`/O2 /std:c++20 /W4`, vérifié). Les rapports de vectorisation et les extraits d'assembleur viennent du vrai MSVC.
+> Code de démonstration : [code/03_simd](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/03_simd). Des exercices accompagnent ce chapitre (distribués séparément en cours). Les benchmarks ont été mesurés sur un Ryzen 9 8940HX (Zen 4, AVX-512), avec g++ 13 en `-O2`. Tous les fichiers `.cpp` **compilent aussi avec MSVC** (`/O2 /std:c++20 /W4`, vérifié). Les rapports de vectorisation et les extraits d'assembleur viennent du vrai MSVC.
 > Ordre suivi : **auto-vectorisation d'abord** (ce que le compilateur fait seul, et quand il échoue), puis **SSE 128 bits** en profondeur, puis **AVX2** et **AVX-512** pour les subtilités.
 
 ## Ce que vous devez savoir faire à la fin
@@ -119,7 +119,7 @@ Messages :
 - `info C5002: loop not vectorized due to reason 'XXXX'`
 - `info C5003: block vectorized` (SLP : instructions consécutives regroupées, sans boucle)
 
-## Le laboratoire : [code/03_simd/autovec.cpp](code/03_simd/autovec.cpp)
+## Le laboratoire : [code/03_simd/autovec.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/autovec.cpp)
 
 15 boucles, compilées avec MSVC `v19.latest` :
 
@@ -267,7 +267,7 @@ _mm_add_ps          _mm256_cmp_ps_mask
 
 **LA référence** : l'[Intel Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html). Il permet de filtrer par jeu d'instructions et donne, pour chaque intrinsic, l'instruction ASM correspondante et une *latence* indicative.
 
-## Visite guidée : [code/03_simd/intrinsics_tour.cpp](code/03_simd/intrinsics_tour.cpp)
+## Visite guidée : [code/03_simd/intrinsics_tour.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/intrinsics_tour.cpp)
 
 Sortie réelle :
 
@@ -351,7 +351,7 @@ Il existe `_mm_hadd_ps` (SSE3) et `_mm_dp_ps` (SSE4.1), mais ils sont souvent pl
 
 ## SSE sur des octets : l'exemple du lexer
 
-[code/03_simd/scan_text.cpp](code/03_simd/scan_text.cpp) : 16 octets comparés d'un coup, `movemask` pour obtenir 1 bit par octet, puis `popcount` / `countr_zero`. C'est le principe de **simdjson** (Geoff Langdale & Daniel Lemire, *Parsing Gigabytes of JSON per Second*, VLDB Journal 2019).
+[code/03_simd/scan_text.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/scan_text.cpp) : 16 octets comparés d'un coup, `movemask` pour obtenir 1 bit par octet, puis `popcount` / `countr_zero`. C'est le principe de **simdjson** (Geoff Langdale & Daniel Lemire, *Parsing Gigabytes of JSON per Second*, VLDB Journal 2019).
 
 ```cpp
 __m128i chunk = _mm_loadu_si128((const __m128i*)(s + i));
@@ -376,7 +376,7 @@ Deux leçons à retenir de ce benchmark. D'abord, sans autorisation explicite du
 
 ## Denormals : un piège classique (audio, physique)
 
-[code/03_simd/denormals.cpp](code/03_simd/denormals.cpp). Les nombres **subnormaux** (plus petits que `FLT_MIN` ≈ 1,17e-38) sont traités par des chemins lents du CPU (microcode). Ils apparaissent dès qu'un filtre, une réverbe ou un amortissement physique décroît vers zéro :
+[code/03_simd/denormals.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/denormals.cpp). Les nombres **subnormaux** (plus petits que `FLT_MIN` ≈ 1,17e-38) sont traités par des chemins lents du CPU (microcode). Ils apparaissent dès qu'un filtre, une réverbe ou un amortissement physique décroît vers zéro :
 
 ```
 sans FTZ/DAZ                                  9.805 ms
@@ -425,7 +425,7 @@ Contrairement aux denormals (un problème de **vitesse**), un NaN est un problè
 
 # 3.4 Bibliothèque vec4 / mat4 en SSE
 
-[code/03_simd/vec4.hpp](code/03_simd/vec4.hpp), testée contre une référence scalaire dans [vec4_test.cpp](code/03_simd/vec4_test.cpp).
+[code/03_simd/vec4.hpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/vec4.hpp), testée contre une référence scalaire dans [vec4_test.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/vec4_test.cpp).
 
 ```cpp
 struct alignas(16) vec4 { __m128 m; /* ... */ };
@@ -477,7 +477,7 @@ Pour un vrai moteur, la référence à utiliser est **DirectXMath** (Microsoft, 
 
 Dans VS : *Project Properties → C/C++ → Code Generation → Enable Enhanced Instruction Set*. MSVC définit les macros `__AVX__`, `__AVX2__`, `__AVX512F__`... selon l'option choisie.
 
-**Différence MSVC / GCC-Clang (piège si vous testez ailleurs)** : MSVC accepte n'importe quel intrinsic dans n'importe quelle fonction. GCC et Clang refusent (`inlining failed in call to 'always_inline' ... target specific option mismatch`) sans `-mavx2` ou `__attribute__((target("avx2")))`. Notre en-tête [common/simd_config.hpp](code/common/simd_config.hpp) masque cette différence (`TARGET_AVX2`).
+**Différence MSVC / GCC-Clang (piège si vous testez ailleurs)** : MSVC accepte n'importe quel intrinsic dans n'importe quelle fonction. GCC et Clang refusent (`inlining failed in call to 'always_inline' ... target specific option mismatch`) sans `-mavx2` ou `__attribute__((target("avx2")))`. Notre en-tête [common/simd_config.hpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/common/simd_config.hpp) masque cette différence (`TARGET_AVX2`).
 
 **Bonne pratique MSVC** : mettre le code AVX2 dans un **`.cpp` séparé compilé avec `/arch:AVX2`** (propriété du fichier dans VS). Tout le code de ce fichier est alors VEX, l'auto-vectorisation y utilise AVX2, et on l'appelle via le dispatch (3.7).
 
@@ -499,7 +499,7 @@ _mm256_permutevar8x32_ps(a, 7..0)   = [ 7  6  5  4 |  3  2  1  0 ]   <- AVX2 : t
 
 (Sortie vérifiée.) Tout code SSE « porté » naïvement en AVX en changeant `_mm_` en `_mm256_` est **faux** dès qu'il utilise `unpack` ou `shuffle`.
 
-## Benchmarks : [code/03_simd/bench_kernels.cpp](code/03_simd/bench_kernels.cpp)
+## Benchmarks : [code/03_simd/bench_kernels.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/bench_kernels.cpp)
 
 1 048 579 `float` (≈ 4 Mo, un peu plus que le L2), chaque mesure couvre 20 exécutions :
 
@@ -534,7 +534,7 @@ AVX-512 mask + popcount                       0.733 ms
 
 ## Démo « moteur » : frustum culling
 
-[code/03_simd/culling.cpp](code/03_simd/culling.cpp) : 1 M de bounding spheres en SoA alignée sur 32, 6 plans.
+[code/03_simd/culling.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/culling.cpp) : 1 M de bounding spheres en SoA alignée sur 32, 6 plans.
 
 ```
 scalaire (early-out)                         12.424 ms
@@ -574,7 +574,7 @@ Pour un jeu PC en 2026, le discours raisonnable est le suivant : **AVX2 comme ci
 
 # 3.7 CPU dispatch
 
-[code/03_simd/cpu_dispatch.cpp](code/03_simd/cpu_dispatch.cpp) et [common/simd_config.hpp](code/common/simd_config.hpp).
+[code/03_simd/cpu_dispatch.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/03_simd/cpu_dispatch.cpp) et [common/simd_config.hpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/common/simd_config.hpp).
 
 **Deux vérifications sont nécessaires** :
 
