@@ -53,6 +53,8 @@ jobs:
             echo "  built ${md%.md}.html"
           done
           cp index.html _site/index.html
+          cp -r code _site/code
+          echo "  copied code/ into _site/code/"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

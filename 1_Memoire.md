@@ -6,7 +6,7 @@ author: Johann Philippe
 # 1. Mémoire, caches, alignement, registres
 
 > Ce cours porte sur l'assembleur, le SIMD et l'écriture d'un petit interpréteur — trois façons différentes d'exploiter le matériel. On commence par la mémoire, parce que c'est **le** problème de performance n°1 dans un moteur, et parce que tout le reste (ASM, SIMD, VM à registres) n'a de sens qu'une fois qu'on a compris pourquoi.
-> Code de démonstration : [code/01_memoire](code/01_memoire). Exercices : [exercices/1_Memoire.md](exercices/1_Memoire.md). Les mesures citées ont été faites sur un Ryzen 9 8940HX (Zen 4), avec g++ 13 en `-O2` ; sous MSVC `/O2`, les ordres de grandeur sont les mêmes.
+> Code de démonstration : [code/01_memoire](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/01_memoire). Exercices : [exercices/1_Memoire.md](exercices/1_Memoire.md). Les mesures citées ont été faites sur un Ryzen 9 8940HX (Zen 4), avec g++ 13 en `-O2` ; sous MSVC `/O2`, les ordres de grandeur sont les mêmes.
 
 ## Objectifs de la partie
 

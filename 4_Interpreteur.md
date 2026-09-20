@@ -6,7 +6,7 @@ author: Johann Philippe
 # 4. Interpréteur : de la chaîne de caractères au registre
 
 > C'est le chapitre qui relie tout : mémoire, ASM et SIMD s'y retrouvent dans la conception d'une petite machine virtuelle et de son assembleur maison — exactement ce que vous allez construire pour le projet.
-> Le code est dans [code/04_interpreteur](code/04_interpreteur) :
+> Le code est dans [code/04_interpreteur](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/04_interpreteur) :
 > - `showdown.cpp` *(distribué comme corrigé après les défis 2 et 5, voir exercices)* : le même programme en tree-walking, stack VM et register VM, avec 3 techniques de dispatch ;
 > - [batch_demo.cpp](code/04_interpreteur/batch_demo.cpp) : interprétation par entité vs par lot (SIMD) ;
 > - `vektor/` : **l'interpréteur de référence complet** (lexer, parser Pratt, sema typée, compilateur vers une VM à registres typés `int64` / `__m128`, assembleur et désassembleur maison, tests). Certains de ses fichiers vous seront distribués **par morceaux**, au fil des exercices, pour servir de corrigés partiels.

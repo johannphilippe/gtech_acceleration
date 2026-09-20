@@ -6,7 +6,7 @@ author: Johann Philippe
 # 2. Assembleur x86-64
 
 > Vous savez déjà écrire du C++, mais probablement pas une ligne d'assembleur. C'est le sujet de ce chapitre : comprendre ce qu'un CPU exécute *réellement*, écrire quelques fonctions en assembleur x86-64, et apprendre à lire ce que produit MSVC. C'est aussi le chapitre-pont : les registres et la pile vus ici sont directement ceux que vous retrouverez dans le SIMD (partie 3) et dans la VM à registres que vous allez construire (partie 4).
-> Code de démonstration : [code/02_asm](code/02_asm). Exercices : [exercices/2_ASM.md](exercices/2_ASM.md). Tous les fichiers `.asm` ont été assemblés et testés : les fonctions sont appelées depuis du C++ avec des tests unitaires. Les extraits « sortie MSVC » viennent du vrai compilateur MSVC (v19.latest x64, via Compiler Explorer).
+> Code de démonstration : [code/02_asm](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/02_asm). Exercices : [exercices/2_ASM.md](exercices/2_ASM.md). Tous les fichiers `.asm` ont été assemblés et testés : les fonctions sont appelées depuis du C++ avec des tests unitaires. Les extraits « sortie MSVC » viennent du vrai compilateur MSVC (v19.latest x64, via Compiler Explorer).
 
 ## Ce que vous devez savoir faire à la fin
 

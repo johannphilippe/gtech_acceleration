@@ -6,7 +6,7 @@ author: Johann Philippe
 # 3. SIMD : Single Instruction, Multiple Data
 
 > Après la mémoire et l'assembleur, la troisième brique matérielle du cours : faire calculer le CPU sur plusieurs valeurs **en une seule instruction**. On commence toujours par regarder ce que le compilateur sait faire **seul** (l'auto-vectorisation) avant d'écrire quoi que ce soit à la main — sinon vous risquez d'écrire du SIMD plus lent que ce que MSVC aurait produit tout seul.
-> Code de démonstration : [code/03_simd](code/03_simd). Exercices : [exercices/3_SIMD.md](exercices/3_SIMD.md). Les benchmarks ont été mesurés sur un Ryzen 9 8940HX (Zen 4, AVX-512), avec g++ 13 en `-O2`. Tous les fichiers `.cpp` **compilent aussi avec MSVC** (`/O2 /std:c++20 /W4`, vérifié). Les rapports de vectorisation et les extraits d'assembleur viennent du vrai MSVC.
+> Code de démonstration : [code/03_simd](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/03_simd). Exercices : [exercices/3_SIMD.md](exercices/3_SIMD.md). Les benchmarks ont été mesurés sur un Ryzen 9 8940HX (Zen 4, AVX-512), avec g++ 13 en `-O2`. Tous les fichiers `.cpp` **compilent aussi avec MSVC** (`/O2 /std:c++20 /W4`, vérifié). Les rapports de vectorisation et les extraits d'assembleur viennent du vrai MSVC.
 > Ordre suivi : **auto-vectorisation d'abord** (ce que le compilateur fait seul, et quand il échoue), puis **SSE 128 bits** en profondeur, puis **AVX2** et **AVX-512** pour les subtilités.
 
 ## Ce que vous devez savoir faire à la fin
