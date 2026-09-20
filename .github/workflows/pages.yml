@@ -1,0 +1,70 @@
+name: Build and deploy course site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+
+      - name: Build HTML
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cat > /tmp/style.html <<'CSS'
+          <style>
+            body { max-width: 980px; margin: 2rem auto; padding: 0 1.2rem; font: 16px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; color: #1f2328; }
+            h1 { border-bottom: 2px solid #d0d7de; padding-bottom: .3rem; margin-top: 2.5rem; }
+            h2 { border-bottom: 1px solid #d8dee4; padding-bottom: .2rem; margin-top: 2rem; }
+            code { font-family: "Cascadia Code", Consolas, monospace; font-size: .9em; background: #f3f4f6; padding: .1em .3em; border-radius: 4px; }
+            pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: .8rem 1rem; overflow-x: auto; line-height: 1.4; }
+            pre code { background: none; padding: 0; }
+            table { border-collapse: collapse; margin: 1rem 0; display: block; overflow-x: auto; }
+            th, td { border: 1px solid #d0d7de; padding: .35rem .7rem; vertical-align: top; }
+            th { background: #f6f8fa; }
+            blockquote { margin: 1rem 0; padding: .5rem 1rem; border-left: 4px solid #0969da; background: #f0f6ff; color: #1f2328; }
+            a { color: #0969da; }
+            nav#TOC { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: .5rem 1.2rem; font-size: .92em; }
+            nav#TOC ul { padding-left: 1.2rem; }
+            .back { display: inline-block; margin-bottom: 1rem; font-size: .9em; }
+          </style>
+          CSS
+          for md in 1_Memoire.md 2_ASM.md 3_SIMD.md 4_Interpreteur.md 5_Projet.md; do
+            pandoc "$md" --from gfm+yaml_metadata_block --to html5 --standalone --toc --toc-depth=2 \
+                   --include-in-header=/tmp/style.html --highlight-style=tango \
+                   --metadata=title:"$(head -3 "$md" | grep '^title:' | sed 's/title: *//')" \
+                   -o "_site/${md%.md}.html"
+            echo "  built ${md%.md}.html"
+          done
+          cp index.html _site/index.html
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

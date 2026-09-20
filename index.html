@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cours ASM / SIMD / Interpréteur</title>
+<style>
+  body { max-width: 980px; margin: 2rem auto; padding: 0 1.2rem; font: 16px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; color: #1f2328; }
+  h1 { border-bottom: 2px solid #d0d7de; padding-bottom: .3rem; }
+  table { border-collapse: collapse; margin: 1.5rem 0; width: 100%; }
+  th, td { border: 1px solid #d0d7de; padding: .6rem .8rem; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  blockquote { margin: 1rem 0; padding: .5rem 1rem; border-left: 4px solid #0969da; background: #f0f6ff; }
+  .chapnum { font-weight: 600; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<h1>Cours ASM / SIMD / Interpréteur</h1>
+
+<blockquote>
+Bachelor 3 GTECH (spécialité moteur), Gaming Campus. Mémoire → assembleur x86-64 → SIMD → interpréteur,
+jusqu'à un projet de machine virtuelle accélérée par le matériel.
+</blockquote>
+
+<table>
+  <tr><th>Chapitre</th><th>Sujet</th></tr>
+  <tr>
+    <td class="chapnum"><a href="1_Memoire.html">1. Mémoire</a></td>
+    <td>Histoire, hiérarchie mémoire, caches, alignement et padding, registres, DOD (AoS/SoA), prédiction de branchement</td>
+  </tr>
+  <tr>
+    <td class="chapnum"><a href="2_ASM.html">2. Assembleur x86-64</a></td>
+    <td>Registres, instructions, pile, convention d'appel Windows x64, MASM dans Visual Studio, encodage des instructions, ARM64</td>
+  </tr>
+  <tr>
+    <td class="chapnum"><a href="3_SIMD.html">3. SIMD</a></td>
+    <td>Histoire, auto-vectorisation d'abord, SSE en profondeur, AVX2, AVX-512, CPU dispatch, NEON</td>
+  </tr>
+  <tr>
+    <td class="chapnum"><a href="4_Interpreteur.html">4. Interpréteur</a></td>
+    <td>Lexer, Pratt, analyse sémantique, stack vs registres (Lua 5), représentation des valeurs, dispatch, LuaJIT, assembleur maison</td>
+  </tr>
+  <tr>
+    <td class="chapnum"><a href="5_Projet.html">5. Le projet</a></td>
+    <td>Cahier des charges, planning, grille d'évaluation, pièges fréquents</td>
+  </tr>
+</table>
+
+<p><a href="https://github.com/johannphilippe/gtech_acceleration">Dépôt du cours sur GitHub</a></p>
+
+</body>
+</html>
