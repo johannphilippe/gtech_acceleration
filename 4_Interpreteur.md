@@ -7,9 +7,9 @@ author: Johann Philippe
 
 > C'est le chapitre qui relie tout : mémoire, ASM et SIMD s'y retrouvent dans la conception d'une petite machine virtuelle et de son assembleur maison — exactement ce que vous allez construire pour le projet.
 > Le code est dans [code/04_interpreteur](code/04_interpreteur) :
-> - [showdown.cpp](code/04_interpreteur/showdown.cpp) : le même programme en tree-walking, stack VM et register VM, avec 3 techniques de dispatch ;
+> - `showdown.cpp` *(distribué comme corrigé après les défis 2 et 5, voir exercices)* : le même programme en tree-walking, stack VM et register VM, avec 3 techniques de dispatch ;
 > - [batch_demo.cpp](code/04_interpreteur/batch_demo.cpp) : interprétation par entité vs par lot (SIMD) ;
-> - [vektor/](code/04_interpreteur/vektor) : **l'interpréteur de référence complet** (lexer, parser Pratt, sema typée, compilateur vers une VM à registres typés `int64` / `__m128`, assembleur et désassembleur maison, tests). Certains de ses fichiers vous seront distribués **par morceaux**, au fil des exercices, pour servir de corrigés partiels.
+> - `vektor/` : **l'interpréteur de référence complet** (lexer, parser Pratt, sema typée, compilateur vers une VM à registres typés `int64` / `__m128`, assembleur et désassembleur maison, tests). Certains de ses fichiers vous seront distribués **par morceaux**, au fil des exercices, pour servir de corrigés partiels.
 > Exercices : [exercices/4_Interpreteur.md](exercices/4_Interpreteur.md).
 
 ## Objectifs de la partie
@@ -172,7 +172,7 @@ La dernière option est celle du compilateur Zig : Andrew Kelley, *A Practical G
 
 ## Analyse sémantique
 
-Le parser ne sait pas si `x` existe, ni si `a + b` a un sens. La sema ([sema.cpp](code/04_interpreteur/vektor/src/sema.cpp)) :
+Le parser ne sait pas si `x` existe, ni si `a + b` a un sens. La sema (`sema.cpp`) :
 
 1. **Résout les noms** avec une pile de portées (`vector<unordered_map<string, int>>`). Chaque déclaration reçoit un `local_id` unique.
 2. **Type** chaque expression, sans conversion implicite : `int + float` est une erreur avec un conseil.
@@ -185,7 +185,7 @@ Le parser ne sait pas si `x` existe, ni si `a + b` a un sens. La sema ([sema.cpp
 
 # 4.6 Modèles d'exécution : tree-walking, pile, registres
 
-Programme de référence ([showdown.cpp](code/04_interpreteur/showdown.cpp)) :
+Programme de référence (`showdown.cpp` *(distribué comme corrigé après les défis 2 et 5, voir exercices)*) :
 
 ```
 s = 0; i = 0;
@@ -243,7 +243,7 @@ registre VM "t"  =  I[3]  =  *(int64_t*)(base_I + 3 * 8)      <- une case dans u
 registre CPU rax =  la case physique "rax" du cœur             <- pas la même chose du tout
 ```
 
-**Une seule allocation pour tout le programme, puis des fenêtres par appel.** Chez Vektor ([vm.cpp](code/04_interpreteur/vektor/src/vm.cpp)), les deux banques — `istack` (`int64_t`) et `xstack` (`__m128`, **allouée alignée sur 16**, sinon `_mm_load_ps` crashe, partie 1) — sont allouées **une seule fois**, à la construction de la VM, assez grandes pour toute la profondeur d'appel possible :
+**Une seule allocation pour tout le programme, puis des fenêtres par appel.** Chez Vektor (`vm.cpp`), les deux banques — `istack` (`int64_t`) et `xstack` (`__m128`, **allouée alignée sur 16**, sinon `_mm_load_ps` crashe, partie 1) — sont allouées **une seule fois**, à la construction de la VM, assez grandes pour toute la profondeur d'appel possible :
 
 ```cpp
 VM::VM(const Module& m, size_t size)
@@ -265,7 +265,7 @@ Chaque appel « fragmente » le tableau au sens où il en réserve une **tranche
 
 **Le compilateur hôte ne « place » pas les 256 registres de la VM dans les 16 registres généraux du CPU** : il n'y a tout simplement pas la place (256 contre 16), et rien ne le lui demande — `I` est un tableau ordinaire à ses yeux. Ce que le compilateur *fait* mettre en vrais registres CPU, ce sont les quelques variables **de l'interpréteur lui-même** qui restent vivantes tout au long de la boucle chaude : le pointeur d'instruction `pc`, le pointeur de base `base_I`/`base_X`, le pointeur de constantes `k`. Ces **pointeurs** tiennent dans des registres physiques, pas le contenu du tableau qu'ils désignent (voir le tableau en 4.10, « état chaud en variables locales »).
 
-**`pc` pointe dans un troisième tableau, encore différent.** Ni `istack`/`xstack` (les registres) ni `code` (le bytecode) ne sont la même chose, et il y en a même un quatrième : chez Vektor ([bytecode.hpp](code/04_interpreteur/vektor/src/bytecode.hpp)), chaque `Function` possède son propre `std::vector<Instr> code` (le flux d'instructions, `pc` s'y promène) **et** ses propres pools de constantes séparés `k_int` / `k_float` / `k_vec` (un `LOADKI r, K[0]` va lire `k_int[0]`, pas `code`). Quatre familles de tableaux, quatre rôles, aucun partagé :
+**`pc` pointe dans un troisième tableau, encore différent.** Ni `istack`/`xstack` (les registres) ni `code` (le bytecode) ne sont la même chose, et il y en a même un quatrième : chez Vektor (`bytecode.hpp`), chaque `Function` possède son propre `std::vector<Instr> code` (le flux d'instructions, `pc` s'y promène) **et** ses propres pools de constantes séparés `k_int` / `k_float` / `k_vec` (un `LOADKI r, K[0]` va lire `k_int[0]`, pas `code`). Quatre familles de tableaux, quatre rôles, aucun partagé :
 
 | Tableau | Contenu | Portée | Qui le pointe |
 |---------|---------|--------|----------------|
@@ -627,15 +627,17 @@ end
 
 | Fichier | Rôle | Lignes |
 |---------|------|--------|
-| [common.hpp](code/04_interpreteur/vektor/src/common.hpp) | positions, erreurs, types, banque de registre d'un type | ~55 |
-| [bytecode.hpp](code/04_interpreteur/vektor/src/bytecode.hpp) | **X-macro des opcodes**, encodage 32 bits, `Function`, `Module` | ~170 |
-| [lexer.cpp](code/04_interpreteur/vektor/src/lexer.cpp) | tokens | ~130 |
-| [parser.cpp](code/04_interpreteur/vektor/src/parser.cpp) | descente récursive + Pratt | ~280 |
-| [sema.cpp](code/04_interpreteur/vektor/src/sema.cpp) | portées, types, builtins, retours | ~300 |
-| [compiler.cpp](code/04_interpreteur/vektor/src/compiler.cpp) | allocation des registres façon Lua, émission, patch des sauts | ~450 |
-| [vm.cpp](code/04_interpreteur/vektor/src/vm.cpp) | boucle d'interprétation (switch **ou** computed goto), opcodes SSE | ~270 |
-| [asm.cpp](code/04_interpreteur/vektor/src/asm.cpp) | **assembleur maison** et désassembleur | ~360 |
-| [main.cpp](code/04_interpreteur/vektor/src/main.cpp) | CLI + testeur (`// expect:`) | ~160 |
+| `common.hpp` | positions, erreurs, types, banque de registre d'un type | ~55 |
+| `bytecode.hpp` | **X-macro des opcodes**, encodage 32 bits, `Function`, `Module` | ~170 |
+| `lexer.cpp` | tokens | ~130 |
+| `parser.cpp` | descente récursive + Pratt | ~280 |
+| `sema.cpp` | portées, types, builtins, retours | ~300 |
+| `compiler.cpp` | allocation des registres façon Lua, émission, patch des sauts | ~450 |
+| `vm.cpp` | boucle d'interprétation (switch **ou** computed goto), opcodes SSE | ~270 |
+| `asm.cpp` | **assembleur maison** et désassembleur | ~360 |
+| `main.cpp` | CLI + testeur (`// expect:`) | ~160 |
+
+*(Fichiers de `vektor/`, distribués progressivement comme corrigés au fil des exercices — voir l'en-tête du chapitre.)*
 
 ```
 vektor run    script.vk      compile et exécute
@@ -686,7 +688,7 @@ C'est le cœur du modèle Lua :
 5. **Appel** : les arguments sont évalués dans les registres libres suivants ; `CALL rA, xB, f` décale la base des registres (`I += A; X += B`) ; le résultat revient dans le premier registre de la fenêtre.
 6. **Piège d'aliasing** : `ok = cond && ok;` compilé naïvement écrit `cond` dans `ok` **avant** de relire `ok`. Le compilateur détecte ce cas (`reads_register`) et passe par un temporaire.
 
-## Assembleur maison ([asm.cpp](code/04_interpreteur/vektor/src/asm.cpp))
+## Assembleur maison (`asm.cpp`)
 
 ```asm
 ; Programme écrit directement en assembleur Vektor (scripts/hand_written.vasm)
