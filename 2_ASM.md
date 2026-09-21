@@ -123,7 +123,22 @@ Chaque registre 64 bits a des « sous-registres » hérités de l'histoire :
 
 ## Registres spéciaux
 
-- **`rip`** (*instruction pointer*) : l'adresse de l'instruction suivante. On ne l'écrit jamais directement — `jmp`, `call` et `ret` le modifient. Il sert aussi d'adresse de base (*RIP-relative addressing*) pour accéder aux globales.
+- **`rip`** (*instruction pointer*) : l'adresse de l'instruction suivante. On ne l'écrit jamais directement — `jmp`, `call` et `ret` le modifient (`call` empile l'ancien `rip`, `ret` le restaure — voir 2.4). Il sert aussi d'adresse de base pour accéder aux globales, le *RIP-relative addressing*.
+
+  **Pourquoi et comment** : en mode long, x86-64 ne permet pas d'encoder une adresse mémoire absolue 64 bits comme opérande général (seule une forme très particulière et quasiment abandonnée, réservée à `mov` avec l'accumulateur, le permet). La façon normale d'atteindre une donnée statique est donc un **déplacement 32 bits signé, ajouté à `rip`** au moment de l'exécution :
+
+  ```asm
+  .data
+  frame_count QWORD 0
+
+  .code
+  tick PROC
+      inc     QWORD PTR [frame_count]   ; MASM résout automatiquement en RIP-relatif
+      ret
+  tick ENDP
+  ```
+
+  Vous n'écrivez jamais `[rip + frame_count]` vous-même en MASM x64 : écrire juste `frame_count` suffit, l'assembleur choisit le mode RIP-relatif automatiquement pour une adresse statique. C'est dans la sortie **désassemblée** de MSVC que ça devient explicite — vous y verrez littéralement `[rip+...]` en face de tout accès à une globale (comparez avec `[rbx]`, une adresse *dynamique* calculée à l'exécution, qui elle ne passe jamais par `rip`). Portée : ±2 Go autour du point d'exécution, largement suffisant pour atteindre n'importe quelle donnée statique du même binaire. Bénéfice collatéral : le code reste indépendant de sa position en mémoire (ASLR, DLL rechargée à une adresse différente à chaque lancement).
 - **`rflags`** : des bits d'état positionnés par les opérations arithmétiques et logiques, lus ensuite par les sauts conditionnels.
 
 | Flag | Nom | Mis à 1 quand... |
@@ -257,6 +272,38 @@ Précédées du préfixe **`rep`** (répète `rcx` fois), ou **`repe`/`repz`**, 
 
 Le **`DF`** (*direction flag*, dans `rflags`) contrôle le sens : `cld` le met à 0 (incrémente `rsi`/`rdi`, le cas normal et quasi systématique dans du code généré par compilateur), `std` le met à 1 (décrémente — rare, et une source classique de bugs si on oublie de le remettre à 0 après).
 
+**Un exemple concret, pour fixer les idées** : `rsi` et `rdi` portent ces noms depuis les tout premiers x86 (*Source Index*, *Destination Index* — retrouvez-les dans le tableau des registres en 2.2), précisément parce que ce sont eux qu'utilisent ces instructions. Copier 256 octets de `src` vers `dst`, et remplir un buffer de zéros, s'écrivent ainsi à la main :
+
+```asm
+; void copy_256(const void* src, void* dst)      -- rcx = src, rdx = dst (convention Windows x64)
+copy_256 PROC
+    push    rsi                 ; rsi et rdi sont non-volatiles (2.2) : à sauvegarder
+    push    rdi
+    mov     rsi, rcx            ; rsi = SOURCE   (d'où son nom)
+    mov     rdi, rdx            ; rdi = DESTINATION (d'où le sien)
+    mov     rcx, 256            ; rcx = compteur pour rep
+    cld                         ; sens croissant (DF = 0)
+    rep     movsb               ; répète 256 fois : [rdi++] = [rsi++]
+    pop     rdi
+    pop     rsi
+    ret
+copy_256 ENDP
+
+; void zero_1024(void* dst)                      -- rcx = dst
+zero_1024 PROC
+    push    rdi
+    mov     rdi, rcx            ; rdi = DESTINATION
+    xor     eax, eax            ; la valeur à écrire (stosd écrit eax)
+    mov     rcx, 256            ; 256 x 4 octets = 1024 octets
+    cld
+    rep     stosd               ; répète 256 fois : [rdi] = eax ; rdi += 4
+    pop     rdi
+    ret
+zero_1024 ENDP
+```
+
+`rep movsb` avec `rcx = 256` fait très exactement ce que ferait une boucle manuelle de 256 tours (`mov al, [rsi]` / `mov [rdi], al` / `inc rsi` / `inc rdi` / `dec rcx` / `jnz ...`), mais tient en une seule instruction encodée sur 2 octets (`F3 A4`). C'est pour ça que le compilateur les choisit spontanément pour un `memcpy`/`memset` de taille connue (revoyez plus haut) : moins d'instructions à décoder, moins de branches à prédire.
+
 **Signé ou non signé ?** Le CPU ne connaît pas les types : `cmp` positionne tous les flags, et **c'est le saut choisi qui interprète**. `jl` lit `SF != OF` (signé), `jb` lit `CF` (non signé). Le compilateur choisit en fonction du type C++ d'origine.
 
 ## Table complète des conditions (`jcc` / `setcc` / `cmovcc`)
@@ -325,6 +372,33 @@ La pile grandit **vers les adresses basses**. `rsp` pointe sur le dernier élém
 - `push rax` fait `rsp -= 8` puis `[rsp] = rax`.
 - `pop rax` fait `rax = [rsp]` puis `rsp += 8`.
 - `call f` fait `push rip_suivant` puis `jmp f`.
+- `ret` fait `pop rip`.
+
+## `rbp`, le frame pointer : pourquoi il existe, pourquoi nos exemples ne s'en servent pas
+
+Le tableau des registres (2.2) nomme `rbp` *base pointer (frame)* — mais aucun exemple MASM de ce cours ne s'en sert : ils adressent tous directement via `rsp`. Pourquoi la case existe-t-elle quand même ?
+
+**Le problème que `rbp` résout** : `rsp` **bouge** en permanence pendant l'exécution d'une fonction — chaque `push`, chaque `call` imbriqué le déplace. Adresser une variable locale par rapport à `rsp` oblige donc à recalculer l'offset à chaque endroit du code où `rsp` a une hauteur différente. `rbp`, lui, est **délibérément figé** une fois pour toutes à l'entrée de la fonction (`mov rbp, rsp`, juste après avoir sauvegardé l'ancien) : toute variable locale s'adresse alors par un offset **constant** depuis `rbp` (`[rbp-8]`, `[rbp-16]`...), quel que soit ce que fait `rsp` ensuite dans le corps de la fonction.
+
+**Un exemple réel** : cette fonction triviale, compilée en **Debug** (`/Od`) —
+
+```cpp
+void add() { int a = 0; int b = 1; int c = a + b; }
+```
+
+```asm
+push    rbp
+push    rdi
+sub     rsp, 128h
+mov     rbp, rsp        ; <- rbp figé ICI, pour tout le reste de la fonction
+mov     dword ptr [a], 0     ; VS résout [a] en [rbp-XX], un offset FIXE
+mov     dword ptr [b], 1     ; idem pour [b]
+...
+```
+
+VS affiche les noms symboliques `[a]`, `[b]`, `[c]` plutôt que les vrais offsets `[rbp-4]`, `[rbp-8]`..., mais ce sont bien des adresses **rbp-relatives**, calculées une fois et valables partout dans la fonction. C'est précisément ce qui permet au débogueur de retrouver une variable locale de façon fiable à n'importe quel point d'arrêt.
+
+**Pourquoi nos exemples MASM ne l'utilisent pas** : en Release, et dans la plupart du code écrit à la main, la taille du frame est connue à l'avance et fixe du début à la fin de la fonction — `rsp` ne bouge qu'au prologue et à l'épilogue, jamais au milieu. Adresser directement via `rsp` (comme tout le code de 2.5) marche donc tout aussi bien, et évite de sacrifier un registre supplémentaire (`rbp` redevient un registre général utilisable). C'est l'option *frame pointer omission*, activée par défaut en `/O2`. `rbp` garde son utilité dans deux cas précis : les **builds Debug** (fiabilité du débogueur, exemple ci-dessus), et les fonctions dont la **pile bouge de façon imprévisible en cours de route** (allocation dynamique sur la pile façon `alloca`) — là, seul un point de référence figé comme `rbp` permet de retrouver ses propres variables locales de façon fiable.
 - `ret` fait `pop rip`.
 
 ## Convention d'appel Windows x64 (Microsoft x64 ABI, *Application Binary Interface*)
