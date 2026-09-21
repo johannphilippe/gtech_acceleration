@@ -6,7 +6,7 @@ author: Johann Philippe
 # 1. Mémoire, caches, alignement, registres
 
 > Ce cours porte sur l'assembleur, le SIMD et l'écriture d'un petit interpréteur — trois façons différentes d'exploiter le matériel. On commence par la mémoire, parce que c'est **le** problème de performance n°1 dans un moteur, et parce que tout le reste (ASM, SIMD, VM à registres) n'a de sens qu'une fois qu'on a compris pourquoi.
-> Code de démonstration : [code/01_memoire](https://github.com/johannphilippe/gtech_acceleration/tree/main/code/01_memoire). Des exercices accompagnent ce chapitre (distribués séparément en cours). Les mesures citées ont été faites sur un Ryzen 9 8940HX (Zen 4), avec g++ 13 en `-O2` ; sous MSVC `/O2`, les ordres de grandeur sont les mêmes.
+> Code de démonstration : [code/01_memoire](https://github.com/johannphilippe/hardware_acceleration/tree/main/code/01_memoire). Des exercices accompagnent ce chapitre (distribués séparément en cours). Les mesures citées ont été faites sur un Ryzen 9 8940HX (Zen 4), avec g++ 13 en `-O2` ; sous MSVC `/O2`, les ordres de grandeur sont les mêmes.
 
 ## Objectifs de la partie
 
@@ -231,7 +231,7 @@ Les adresses manipulées par le programme sont **virtuelles**. L'OS et la **MMU*
 
 ## Démonstration 1 : parcours d'une grille
 
-[code/01_memoire/cache.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/01_memoire/cache.cpp)
+[code/01_memoire/cache.cpp](https://github.com/johannphilippe/hardware_acceleration/blob/main/code/01_memoire/cache.cpp)
 
 ```cpp
 const size_t N = 4096;
@@ -353,7 +353,7 @@ Un `std::mutex` ne règle donc rien ici : il protège une variable *effectivemen
 
 ## Exemple
 
-[code/01_memoire/alignment.cpp](https://github.com/johannphilippe/gtech_acceleration/blob/main/code/01_memoire/alignment.cpp)
+[code/01_memoire/alignment.cpp](https://github.com/johannphilippe/hardware_acceleration/blob/main/code/01_memoire/alignment.cpp)
 
 ```cpp
 struct Bad  { bool active; double x; bool visible; int32_t id; bool dirty; };
