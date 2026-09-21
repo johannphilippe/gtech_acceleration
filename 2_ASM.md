@@ -170,6 +170,10 @@ Chaque registre 64 bits a des « sous-registres » hérités de l'histoire :
 
 C'est le sujet complet de la partie 3 — pour l'instant, retenez juste que ces registres existent et qu'ils ne sont pas optionnels.
 
+## SWAR : simuler un peu de SIMD avec des registres généraux
+
+Avant l'apparition d'instructions SIMD dédiées (partie 3), on bricolait un parallélisme limité directement dans les GPR : empaqueter plusieurs petites valeurs dans un seul registre 64 bits et les manipuler d'un coup. Ça marche sans rien de spécial pour les opérations **logiques** (`and`, `or`, `xor` : aucune retenue à gérer), mais casse pour l'arithmétique (`add`/`sub`) à cause de la retenue qui se propage à travers les frontières entre vos « lanes » — précisément ce que le vrai matériel SIMD résout, avec des lanes isolées au niveau du silicium. Cette technique a un nom, **SWAR** (*SIMD Within A Register*) ; détail et exemple en 3.1.
+
 ---
 
 # 2.3 Syntaxe, instructions et adressage

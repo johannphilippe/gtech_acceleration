@@ -52,6 +52,18 @@ SIMD : [a0 a1 a2 a3]
 
 La formule sous-entend clairement sa réponse : deux bœufs puissants valent mieux que mille poulets. L'histoire lui a donné à la fois raison et tort. Un cœur CPU moderne avec ses registres `zmm` de 512 bits, c'est un bœuf plus costaud à chaque génération — exactement ce que Cray défendait. Mais les GPU, avec des milliers de cœurs simples exécutant la même instruction en parallèle sur des données différentes, sont littéralement les 1024 poulets — et ils dominent aujourd'hui le calcul massivement parallèle (rendu, deep learning). Les deux modèles cohabitent, chacun sur son terrain : le SIMD sur CPU que voit ce chapitre est la version « bœuf » du parallélisme de données.
 
+## SWAR : le parallélisme « fait maison » avant le vrai SIMD
+
+Pendant que Cray construisait de vrais registres vectoriels, les CPU grand public n'avaient que des registres généraux (partie 2.2) — et on trouvait déjà le moyen d'y empaqueter un peu de parallélisme. La technique porte un nom, **SWAR** (*SIMD Within A Register*) : empaqueter plusieurs petites valeurs dans un seul registre 64 bits, puis les manipuler d'un coup avec une instruction ordinaire. Ça fonctionne « gratuitement » pour les opérations **logiques** (`and`, `or`, `xor`) — aucune retenue à gérer, chaque bit est indépendant. Ça casse pour l'arithmétique (`add`, `sub`) : une addition classique propage sa retenue **bit à bit sur tout le registre**, donc si un octet déborde, il contamine l'octet voisin. C'est très exactement ce que le vrai SIMD résout : dans un `xmm`, chaque lane est isolée **au niveau du silicium**, `paddb` ne laisse jamais une retenue franchir une frontière d'octet.
+
+L'exemple canonique, tiré de *Hacker's Delight* (Henry Warren) et utilisé historiquement dans des implémentations de `strlen`/`memchr` (glibc, avant que SSE2 devienne une base universelle sous x86-64) : détecter si un mot de 64 bits contient un octet nul, en masquant soigneusement les bits de poids fort de chaque lane pour empêcher la retenue de « fuir » vers la lane voisine :
+
+```c
+#define haszero(v) (((v) - 0x0101010101010101ULL) & ~(v) & 0x8080808080808080ULL)
+```
+
+Aujourd'hui, le SWAR reste un outil de niche — une fonction minuscule où monter un état SSE/AVX coûterait plus cher que le gain (voir 3.2, les petites boucles), ou du code historique/embarqué sans SIMD disponible. Mais c'est un excellent rappel de *pourquoi* le matériel vectoriel a été inventé : même idée de traiter plusieurs valeurs à la fois, mais avec des lanes réellement isolées par le matériel, pas simulées à coups de masques.
+
 ## Le SIMD dans nos PC
 
 | Année | Extension | Registres | Apport principal |
