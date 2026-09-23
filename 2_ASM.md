@@ -463,6 +463,28 @@ int caller(int) PROC
 
 Remarques : `x` arrive dans `ecx` et repart dans `ecx`, donc le compilateur n'a rien à faire. Le 5e argument est écrit à `[rsp+32]`, juste au-dessus des 32 octets de shadow space. `56 + 8` (adresse de retour) `= 64`, un multiple de 16 : la pile est bien alignée au moment du `call`. `sub rsp, 40` aurait suffi, mais MSVC arrondit la zone d'arguments à un multiple de 16.
 
+### Pourquoi « 8 mod 16 » et pas simplement « 16 » ?
+
+C'est le point qui prête le plus à confusion : la règle ABI dit que `rsp` doit être multiple de 16 **au moment du `call`**, mais la ligne « Alignement » du tableau ci-dessus parle de fonctions dont l'**entrée** est à « 8 mod 16 ». Les deux sont vraies en même temps, à des instants différents : `call` pousse 8 octets (l'adresse de retour), ce qui décale l'alignement d'une demi-ligne de 16. Suivez `rsp` sur un appel imbriqué, en partant d'une adresse hypothétique déjà alignée sur 16 (« 0 mod 16 ») :
+
+```
+avant `call foo`                        : rsp = ...1000   (0 mod 16 -- requis par l'ABI pour CE call)
+call foo   -> push l'adresse de retour (8 octets)
+entrée de foo                           : rsp = ...0FF8   (8 mod 16 -- décalé par le call)
+
+foo:
+    push rbx                             -> encore 8 octets
+                                         : rsp = ...0FF0   (0 mod 16 -- ré-aligné !)
+    sub rsp, 32   ; shadow space          -> 32 est multiple de 16, ne change pas le "mod 16"
+                                         : rsp = ...0FD0   (0 mod 16 -- toujours aligné)
+    call bar   -> push l'adresse de retour (8 octets)
+    entrée de bar                       : rsp = ...0FC8   (8 mod 16 -- décalé, comme foo à son entrée)
+```
+
+Le schéma se répète à l'identique à chaque niveau d'appel : `call` décale toujours de 8, donc l'entrée d'**une** fonction est toujours à 8 mod 16 — c'est la trace directe du `push` de l'adresse de retour, rien de plus mystérieux. Le rôle du prologue est de **ré-aligner** avant le prochain `call` : soit avec un nombre impair de `push` de 8 octets (comme `push rbx` ci-dessus, qui à lui seul ramène à 0 mod 16), soit avec un `sub rsp, N` où `N` compense ce qui a déjà été poussé. C'est exactement ce qui se passe dans `caller()` juste au-dessus : `sub rsp, 56` ramène l'ensemble (`56` + les `8` de l'adresse de retour déjà poussée par l'appelant de `caller`) à `64`, multiple de 16 — la pile est de nouveau prête pour le `call external(...)` qui suit.
+
+**Piège si vous oubliez ce détail** : un prologue qui pousse un **nombre pair** de registres (2, 4...) sans compenser par un `sub rsp` de taille impaire par rapport à 16 laisse `rsp` à 8 mod 16 au moment d'un `call` interne — l'appelée reçoit alors une pile mal alignée. Sur x86-64, ça ne plante pas toujours immédiatement (beaucoup de code scalaire tolère un `rsp` non aligné), mais **`movaps`/`movdqa`** et certaines instructions SSE (partie 3) exigent un opérande mémoire aligné sur 16 et lèvent une exception `#GP` sinon — une des causes classiques de crash « aléatoire », qui n'apparaît qu'en présence de SIMD.
+
 ## Comparaison : System V AMD64 (Linux, macOS)
 
 | | Windows x64 | System V AMD64 |
@@ -600,6 +622,44 @@ asm_apply_twice ENDP
 ```
 
 **`PROC FRAME`, `.pushreg`, `.allocstack`, `.endprolog`** génèrent les *unwind infos*. Sans elles, le programme fonctionne tant que tout va bien, mais une exception C++ qui traverse la fonction, le debugger (call stack) ou un crash dump deviennent incohérents. C'est une spécificité Windows x64 qui n'existe pas sous Linux.
+
+### Un piège sur « leaf » : toucher `rsp` suffit, même sans appel
+
+`asm_apply_twice` ci-dessus est non-leaf au sens intuitif : elle appelle autre chose (`call rbx`). Mais relisez la ligne « Unwind info » du tableau 2.4 : « toute fonction non-leaf (**ou** qui touche `rsp` **ou** un registre non-volatile) ». Le *ou* est important — une fonction qui n'appelle **jamais rien** peut quand même perdre son statut « leaf » au sens de l'ABI, simplement parce qu'elle modifie `rsp` :
+
+```asm
+; int64_t asm_sum_last3(const int64_t* data, int64_t count)   -- copie 3 valeurs sur la pile puis les additionne
+asm_sum_last3 PROC FRAME
+    sub     rsp, 24                 ; scratch local -- AUCUN call, AUCUN push de registre non-volatile
+    .allocstack 24
+    .endprolog
+
+    mov     rax, [rcx + rdx*8 - 8]
+    mov     [rsp],    rax
+    mov     rax, [rcx + rdx*8 - 16]
+    mov     [rsp+8],  rax
+    mov     rax, [rcx + rdx*8 - 24]
+    mov     [rsp+16], rax
+
+    mov     rax, [rsp]
+    add     rax, [rsp+8]
+    add     rax, [rsp+16]
+
+    add     rsp, 24
+    ret
+asm_sum_last3 ENDP
+```
+
+Cette fonction ne fait **aucun `call`** — au sens « arbre d'appel », c'est bien une feuille. Mais elle bouge `rsp` (`sub rsp, 24`), ce qui suffit à lui retirer le statut *leaf* au sens précis de l'ABI Windows x64 : sans `.allocstack`/`.endprolog`, un déroulement d'exception (ou un simple stack walk par le debugger) ne saurait plus retrouver l'adresse de retour, puisqu'elle ne se trouve plus à `[rsp]` mais à `[rsp+24]`. Retenez « leaf » comme « ne touche à rien de ce qui doit être déroulé », pas comme « n'appelle personne ».
+
+### Voir les unwind infos pour de vrai : `.pdata` / `.xdata`
+
+`.pdata` et `.xdata` ne sont pas des directives que vous écrivez vous-même — ce sont les **sections du fichier objet/exécutable** que `.pushreg`, `.allocstack` et `.endprolog` remplissent pour vous à l'assemblage :
+
+- **`.xdata`** contient, pour chaque fonction `PROC FRAME`, une structure `UNWIND_INFO` : la liste des « unwind codes » (un par `.pushreg`/`.allocstack`/`.savexmm128`...), chacun associé à l'offset dans le prologue où il s'applique. C'est l'équivalent binaire du commentaire `; entrée : RSP = 8 mod 16 -> après push : 0 mod 16` que vous écrivez à côté de chaque instruction — sauf que là, c'est la machine qui le lit pour dérouler la pile.
+- **`.pdata`** contient une table de `RUNTIME_FUNCTION` (un triplet début/fin/pointeur-vers-`.xdata`) par fonction : l'index qui permet à Windows, pour une adresse `rip` donnée pendant une exception ou un stack walk, de retrouver instantanément la bonne `UNWIND_INFO`.
+
+Pour les voir vous-même sur un `.obj` compilé par MASM : `dumpbin /unwindinfo functions.obj` (même outil en ligne de commande VS que `/disasm`, voir 2.7). Vous devriez y retrouver, pour `asm_apply_twice`, deux codes — un `ALLOC_SMALL` pour `sub rsp, 32` et un `PUSH_NONVOL` pour `push rbx` — listés dans l'ordre **inverse** du prologue (le dérouleur défait le prologue en remontant du dernier au premier). Pour `asm_add` (`PROC` simple, sans `FRAME`), la même commande ne produira **aucune** entrée : sans `.pdata`/`.xdata`, une exception qui traverserait cette fonction ne saurait pas comment la « dérouler » — sans conséquence ici, puisqu'une fonction qui ne touche ni `rsp` ni un registre non-volatile n'a, par construction, rien à défaire.
 
 ### `cpuid` : interroger le CPU
 
