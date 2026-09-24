@@ -163,7 +163,7 @@ Chaque séance combine une courte capsule théorique (20-30 min) au moment où v
 
 # 5.7 Vektor, l'interpréteur de référence
 
-Vous ne recevrez jamais Vektor (l'interpréteur de référence complet, voir partie 4) en un seul bloc avant la fin du projet — ce serait une solution complète pour l'ensemble du projet. En revanche, certains de ses fichiers vous seront distribués **par morceaux, comme corrigés**, au fil des exercices de la partie 4 : `lexer.cpp` et `Parser::expression` après le défi 1, `asm.cpp` après le défi 4, `showdown.cpp` après les défis 2 et 5. Utilisez-les pour comparer votre approche, pas pour copier — le but est de comprendre pourquoi vos choix diffèrent, pas d'obtenir le même code.
+Certains fichiers de Vektor (l'interpréteur de référence complet, voir partie 4) vous sont distribués **par morceaux, comme corrigés**, au fil des exercices de la partie 4 : `lexer.cpp` et `Parser::expression` après le défi 1, `asm.cpp` après le défi 4, `showdown.cpp` après les défis 2 et 5. Utilisez-les pour comparer votre approche, pas pour copier — le but est de comprendre pourquoi vos choix diffèrent, pas d'obtenir le même code.
 
 Vektor suit spécifiquement le chemin **VM à registres** décrit en 5.2 : `asm.cpp` (l'assembleur maison) et `showdown.cpp` (stack vs registres) n'ont de sens directement transposable que si vous avez choisi cette même architecture. `lexer.cpp` et `Parser::expression`, en revanche, sont utiles quel que soit votre choix — un front-end (lexer/parser) est nécessaire pour n'importe quel DSL, indépendamment de comment vous l'exécutez ensuite.
 
