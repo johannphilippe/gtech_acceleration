@@ -163,6 +163,18 @@ Messages :
 - **500-502** : variable d'induction non reconnue (globale, borne qui change, pas multiple) ;
 - **1400-1405** : option ou pragma qui désactive la vectorisation (`#pragma loop(no_vector)`, `/O1`).
 
+## Pourquoi ça échoue vraiment : quatre cas expliqués
+
+Un code de raison MSVC dit *que* la boucle échoue, pas toujours *pourquoi* en profondeur. Quatre cas reviennent sans cesse et méritent d'être compris au niveau du matériel, pas juste mémorisés comme des règles :
+
+**Cas 03 — réduction flottante non reconnue (1105)**. `sum += x[i]` en boucle semble trivial à paralléliser, mais vectoriser une somme, c'est **changer l'ordre des additions** : au lieu de `((a+b)+c)+d`, une version à 4 voies calcule `(a+c)+(b+d)`. En entiers, l'addition est associative, l'ordre ne change jamais le résultat (cas 04, vectorisé sans problème). En flottant IEEE 754, l'addition **n'est pas associative** : chaque addition arrondit son résultat, et arrondir dans un ordre différent donne un résultat différent au bit près (démonstration chiffrée plus haut, « Pourquoi `/fp:fast` change tout »). Le compilateur, en `/fp:precise` (le défaut), n'a **pas le droit** de changer ce résultat sans autorisation explicite — d'où le refus, corrigé uniquement par `/fp:fast`/`/fp:contract`, ou en acceptant consciemment le changement d'ordre avec des accumulateurs écrits à la main (voir les 4 accumulateurs du benchmark en 3.5).
+
+**Cas 05 — dépendance portée par la boucle (1200)**. `a[i] = a[i-1] + a[i]` (une *prefix sum*) : pour calculer `a[i]`, il **faut** déjà connaître `a[i-1]`, qui vient d'être calculé à l'itération précédente. Contrairement à la réduction (où l'ordre peut changer), ici c'est la **donnée elle-même** qui dépend séquentiellement d'elle-même : il n'existe littéralement pas de version qui calculerait 4 `a[i]` en même temps sans déjà connaître les 3 précédents. Ce n'est pas une limite du compilateur, c'est une limite de l'algorithme — une prefix sum a un algorithme parallèle dédié (*scan* parallèle, hors programme), mais ce n'est pas une simple vectorisation de la boucle naïve.
+
+**Cas 06 — sortie anticipée (506)**. Une boucle `for (i=0; i<n; ++i) if (data[i]==target) return i;` s'arrête **dès qu'elle trouve** ce qu'elle cherche — mais une version SIMD calcule 4 (ou 8, ou 16) comparaisons *en même temps*, avant de savoir laquelle aurait dû arrêter la boucle. Le compilateur refuse par prudence : si `data[3]` correspond à la cible mais que la boucle scalaire se serait arrêtée à `data[1]` (à cause d'un effet de bord ailleurs), les deux versions divergeraient. La solution manuelle contourne ce refus : comparer un bloc entier avec `cmpeq` + `movemask`, PUIS regarder si le masque est non nul, et SEULEMENT alors chercher l'index exact avec `countr_zero` — c'est-à-dire assumer soi-même la responsabilité que le compilateur refuse de prendre à votre place.
+
+**Cas 07 — appel de fonction opaque (1200)**. Un appel à une fonction dont le compilateur ne peut pas voir le corps (déclarée dans un autre `.cpp`, un pointeur de fonction, une fonction virtuelle) est traité comme une **boîte noire qui pourrait faire n'importe quoi** — y compris modifier le tableau qu'on est en train de parcourir, lancer une exception, ou avoir des effets de bord dont l'ordre compte. Le compilateur doit alors supposer le pire et garder l'ordre séquentiel exact. La correction la plus fréquente (rendre la fonction `inline`, ou visible dans le même fichier/header) fonctionne précisément parce qu'elle donne au compilateur de quoi **prouver** que la fonction n'a pas ces effets de bord dangereux — ce n'est pas un contournement arbitraire, c'est lui fournir l'information qui lui manquait.
+
 ## Ce que montre le code généré
 
 **Cas 02, aliasing** : sans `__restrict`, MSVC vérifie à l'exécution que `y` et `x` ne se chevauchent pas, puis choisit la version vectorisée ou la version scalaire.
@@ -279,6 +291,99 @@ _mm_add_ps          _mm256_cmp_ps_mask
 
 **LA référence** : l'[Intel Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html). Il permet de filtrer par jeu d'instructions et donne, pour chaque intrinsic, l'instruction ASM correspondante et une *latence* indicative.
 
+## Table de référence : les intrinsics SSE les plus utilisés
+
+Pas besoin de mémoriser l'Intel Intrinsics Guide en entier : voici les intrinsics `__m128`/`__m128i` qui reviennent dans **presque tout** le code SIMD d'un moteur. Chaque ligne donne l'équivalent `ps` (float) ; le principe est identique pour `pd` (double) et `epi32` (entiers), en changeant le suffixe.
+
+**Chargement et stockage**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_load_ps(ptr)` | `movaps` | charge 4 `float` ; **l'adresse doit être alignée sur 16**, sinon crash |
+| `_mm_loadu_ps(ptr)` | `movups` | charge 4 `float`, adresse quelconque |
+| `_mm_load_ss(ptr)` | `movss` | charge 1 `float` dans l'élément 0, met les 3 autres à 0 |
+| `_mm_load_si128(ptr)` | `movdqa` | charge 128 bits entiers, alignés |
+| `_mm_loadu_si128(ptr)` | `movdqu` | charge 128 bits entiers, non alignés |
+| `_mm_store_ps(ptr, v)` | `movaps` | stocke 4 `float`, alignés |
+| `_mm_storeu_ps(ptr, v)` | `movups` | stocke 4 `float`, non alignés |
+| `_mm_stream_ps(ptr, v)` | `movntps` | stocke **sans polluer le cache** (*non-temporal store* : pour de gros volumes écrits une seule fois, jamais relus tout de suite) |
+
+**Construire des constantes**
+
+| Intrinsic | Instruction MASM (typique) | Ce que ça fait |
+|-----------|-------------------------------|-----------------|
+| `_mm_set_ps(e3,e2,e1,e0)` | plusieurs `mov`/`unpck` | remplit le registre — **ordre inversé**, voir « Piège n°1 » ci-dessous |
+| `_mm_setr_ps(e0,e1,e2,e3)` | idem | même chose, **ordre naturel** (*set-reversed*) |
+| `_mm_set1_ps(x)` | `movss` + `shufps` (ou `vbroadcastss` en AVX) | diffuse (*broadcast*) une seule valeur dans les 4 éléments |
+| `_mm_setzero_ps()` | `xorps xmm, xmm` | registre à zéro — la façon la **plus rapide** de « vider » un registre (aucune dépendance sur une valeur précédente) |
+
+**Arithmétique flottante**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_add_ps` / `_mm_sub_ps` / `_mm_mul_ps` / `_mm_div_ps` | `addps` / `subps` / `mulps` / `divps` | les 4 opérations de base, sur les 4 éléments |
+| `_mm_add_ss` / ... | `addss` / ... | idem, mais **seulement l'élément 0** (les 3 autres du 1er opérande passent inchangés) |
+| `_mm_sqrt_ps` | `sqrtps` | racine carrée exacte (lente, ~12-15 cycles) |
+| `_mm_rsqrt_ps` | `rsqrtps` | **approximation** de `1/sqrt(x)` (~12 bits de précision, très rapide) — voir l'itération de Newton dans les exercices pour la raffiner |
+| `_mm_rcp_ps` | `rcpps` | approximation de `1/x` |
+| `_mm_min_ps` / `_mm_max_ps` | `minps` / `maxps` | minimum/maximum élément par élément — **asymétriques avec NaN**, voir « NaN » plus bas |
+
+**Arithmétique entière**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_add_epi32` / `_mm_sub_epi32` | `paddd` / `psubd` | addition/soustraction sur 4 `int32` |
+| `_mm_mullo_epi32` (SSE4.1) | `pmulld` | multiplication 32×32→32 bits (les 32 bits bas du résultat) |
+| `_mm_add_epi8` / `_mm_adds_epu8` | `paddb` / `paddusb` | addition sur 16 `int8` ; la version `adds`/`us` **sature** au lieu de déborder (utile pour un canal de couleur 0-255) |
+
+**Comparaison**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_cmpeq_ps` / `_mm_cmplt_ps` / `_mm_cmple_ps` / `_mm_cmpgt_ps` / `_mm_cmpge_ps` | `cmpeqps` / `cmpltps` / ... | produit un **masque** (tout à 1 ou tout à 0) par élément, voir « Les masques » ci-dessous. `cmpgt`/`cmpge` inversent simplement les opérandes de `cmplt`/`cmple` en interne |
+| `_mm_cmpeq_epi32` / `_mm_cmpgt_epi32` | `pcmpeqd` / `pcmpgtd` | équivalent entier — **`pcmpgt` est toujours signé**, voir le piège du test d'intervalle en octets plus bas |
+| `_mm_cmpunord_ps` | `cmpunordps` | vrai là où **l'un des deux opérandes est NaN** (voir « NaN ») |
+
+**Logique bit à bit**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_and_ps` / `_mm_or_ps` / `_mm_xor_ps` / `_mm_andnot_ps(a,b)` | `andps` / `orps` / `xorps` / `andnps` | opérations bit à bit — base de la sélection branchless (`andnot(a,b)` calcule `(~a) & b`, dans cet ordre précis) |
+
+**Sélection / branchless**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_blendv_ps` (SSE4.1) | `blendvps` | `r[i] = mask[i] ? b[i] : a[i]` en **une seule instruction** (le bit de poids fort de chaque élément du masque décide) |
+| `_mm_blend_ps` (SSE4.1) | `blendps` | comme `blendv`, mais le masque est un **immédiat** connu à la compilation (pas un registre) |
+
+**Conversion**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_cvtps_epi32` | `cvtps2dq` | `float` → `int32`, **arrondi** selon le mode courant de `MXCSR` (par défaut : au plus proche) |
+| `_mm_cvttps_epi32` | `cvttps2dq` | `float` → `int32`, **troncature** (le `tt` = *truncate*, comme un cast C++ `(int)x`) |
+| `_mm_cvtepi32_ps` | `cvtdq2ps` | `int32` → `float` |
+| `_mm_cvtss_f32` | (extraction, souvent gratuite) | lit l'élément 0 comme un `float` C++ ordinaire |
+
+**Shuffle et mouvement de données**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_shuffle_ps(a,b,imm)` | `shufps` | réarrange 2 éléments de `a` (bas) + 2 de `b` (haut) selon un masque `_MM_SHUFFLE` |
+| `_mm_shuffle_epi32(a,imm)` | `pshufd` | comme `shuffle_ps`, mais **un seul opérande** (les 4 éléments de `a`, réarrangés librement) |
+| `_mm_shuffle_epi8(a,idx)` (SSSE3) | `pshufb` | réarrangement **arbitraire** octet par octet, la table d'indices est elle-même un `__m128i` (pas un immédiat) — la brique de base de beaucoup de parseurs SIMD |
+| `_mm_unpacklo_ps` / `_mm_unpackhi_ps` | `unpcklps` / `unpckhps` | entrelace les 2 éléments bas (ou hauts) de `a` et `b` |
+| `_mm_movehl_ps` / `_mm_movelh_ps` | `movhlps` / `movlhps` | déplace la moitié haute/basse d'un registre vers l'autre — utilisé dans la réduction horizontale (plus bas) |
+| `_mm_movemask_ps` | `movmskps` | extrait le bit de signe de chaque élément dans un `int` (4 bits) |
+
+**Horizontal (au-delà de SSE2)**
+
+| Intrinsic | Instruction MASM | Ce que ça fait |
+|-----------|-------------------|-----------------|
+| `_mm_hadd_ps` (SSE3) | `haddps` | additionne les éléments adjacents (souvent plus lent que la réduction manuelle, voir plus bas) |
+| `_mm_dp_ps` (SSE4.1) | `dpps` | produit scalaire (*dot product*) avec un masque immédiat pour choisir les éléments — pratique, rarement le plus rapide |
+
 ## Visite guidée : [code/03_simd/intrinsics_tour.cpp](https://github.com/johannphilippe/hardware_acceleration/blob/main/code/03_simd/intrinsics_tour.cpp)
 
 Sortie réelle :
@@ -313,22 +418,37 @@ find '(' dans 16 octets      movemask = 0x1000 -> index 12
 - `_mm_loadu_ps` / `movups` : n'importe quelle adresse. Depuis Nehalem (2008), **aussi rapide** que `load` quand la donnée est alignée.
 - Recommandation actuelle : **`loadu` partout**, et alignez vos données quand c'est possible (le gain vient de l'alignement réel, pas de l'instruction).
 
+**`load`/`loadu` ne « retournent » jamais l'ordre**, contrairement à `_mm_set_ps` ci-dessus : `ptr[0]` va dans l'élément 0, `ptr[1]` dans l'élément 1, etc. — l'ordre naturel, celui de la mémoire. C'est précisément pour ça que `_mm_setr_ps` existe : il donne, à partir de valeurs littérales, le **même** ordre que `_mm_loadu_ps` donnerait à partir d'un tableau. Le piège ne touche que `_mm_set_ps` (et sa famille `_mm_set_epi32`...), jamais `load`/`loadu`.
+
 ### Les masques et le *branchless*
 
-Une comparaison SIMD ne produit pas un booléen : elle produit un **masque** avec tous les bits à 1 (`0xFFFFFFFF`) ou à 0. On l'utilise pour **sélectionner** sans branchement :
+**Pourquoi c'est le cœur du SIMD, pas un détail** : en scalaire, un `if` compile en un saut conditionnel (`jcc`), et un CPU moderne **prédit** l'issue du saut pour continuer à exécuter en avance (partie 2.6). Sur des données aléatoires, cette prédiction se trompe environ une fois sur deux, et chaque erreur coûte 15-20 cycles (vider le pipeline). En SIMD, il n'y a **pas de saut par élément possible** : une instruction `addps` traite ses 4 lanes, point final, elle ne peut pas « sauter » sur 2 d'entre elles et pas les 2 autres. La solution : calculer **les deux issues** (le `if` et le `else`) pour **tous** les éléments, puis choisir le bon résultat par élément avec un masque — sans aucun saut. C'est exactement ce que montre le benchmark « clamp » en 3.5 (`x22`, gain qui vient de la suppression des mauvaises prédictions, pas de la largeur SIMD).
+
+Une comparaison SIMD ne produit donc pas un booléen : elle produit un **masque**, un registre où chaque élément vaut soit **tous bits à 1** (`0xFFFFFFFF` pour un `float` sur 32 bits — qui, réinterprété comme flottant, serait un NaN, mais peu importe : on ne le lit jamais comme un nombre, seulement comme un motif de bits), soit **tous bits à 0**. On s'en sert pour **sélectionner** sans branchement, avec de l'algèbre booléenne pure :
 
 ```cpp
 // pour chaque i : r[i] = cond[i] ? b[i] : a[i]
-__m128 mask = _mm_cmpgt_ps(b, zero);
-__m128 r = _mm_or_ps(_mm_and_ps(mask, b), _mm_andnot_ps(mask, a));   // SSE2
-__m128 r = _mm_blendv_ps(a, b, mask);                                 // SSE4.1
+__m128 mask = _mm_cmpgt_ps(b, zero);                                  // mask[i] = 0xFFFFFFFF si b[i] > 0, sinon 0
+__m128 r = _mm_or_ps(_mm_and_ps(mask, b), _mm_andnot_ps(mask, a));    // SSE2
+__m128 r = _mm_blendv_ps(a, b, mask);                                 // SSE4.1 : la même chose, en une instruction
 ```
 
-`_mm_movemask_ps` extrait le bit de signe de chaque élément dans un `int` (4 bits). Ça permet :
+**Pourquoi ça marche, bit à bit** : `and_ps(mask, b)` garde `b` là où `mask` vaut tout-1 (`x AND 1...1 = x`), et met à 0 là où `mask` vaut tout-0 (`x AND 0...0 = 0`). Symétriquement, `andnot_ps(mask, a)` calcule `(~mask) AND a` : ça garde `a` exactement là où `mask` valait 0 (donc là où le premier terme a mis des zéros), et vice-versa. Les deux termes ne se chevauchent jamais (un bit de `mask` est soit 1 soit 0, jamais les deux), donc le `or_ps` final les recombine sans collision : chaque élément du résultat vient entièrement de `b`, ou entièrement de `a`, jamais d'un mélange des deux. `_mm_blendv_ps` fait exactement ce calcul en microcode, en une seule instruction — préférez-le dès que SSE4.1 est disponible (2007+, quasi universel aujourd'hui).
 
-- des **tests globaux** : `if (_mm_movemask_ps(mask) == 0)` (aucun élément ne vérifie) ;
-- de **compter** : `std::popcount(movemask)` ;
-- de **trouver l'index** : `std::countr_zero(movemask)` (C++20, `<bit>`).
+**Exemple numérique**, avec `a = [1, 2, 3, 4]`, `b = [10, -20, 30, -40]`, `mask = (b > 0)` :
+
+```
+mask   = [0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000]
+and(mask, b)    = [10, 0, 30, 0]          -- b gardé où mask=1
+andnot(mask, a) = [0, 2, 0, 4]            -- a gardé où mask=0
+or(...)         = [10, 2, 30, 4]          -- = "cond ? b : a", élément par élément
+```
+
+`_mm_movemask_ps` extrait le bit de signe de chaque élément dans un `int` (4 bits — c'est justement le bit qui vaut 1 dans un masque tout-1, et 0 dans un masque tout-0, d'où son utilité ici). Ça permet, une fois qu'on a réduit un masque de 128 bits à un entier de 4 bits :
+
+- des **tests globaux** : `if (_mm_movemask_ps(mask) == 0)` (aucun élément ne vérifie la condition — utile pour un *early-out* : sauter carrément le traitement d'un bloc de 4 si rien ne s'applique) ;
+- de **compter** : `std::popcount(movemask)` (combien d'éléments vérifient la condition) ;
+- de **trouver l'index** : `std::countr_zero(movemask)` (C++20, `<bit>`) donne l'indice du **premier** élément qui vérifie la condition — c'est exactement la technique utilisée pour `scan_text.cpp` plus bas (trouver la position d'un caractère dans un bloc de 16 octets).
 
 ### Shuffles
 
@@ -338,16 +458,38 @@ __m128 r = _mm_blendv_ps(a, b, mask);                                 // SSE4.1
 __m128 yzx = _mm_shuffle_ps(v, v, _MM_SHUFFLE(3, 0, 2, 1));
 ```
 
-C'est la base du produit vectoriel (voir `vec4.hpp`) et du *swizzling* des langages de shader (`v.zyx`).
+Un shuffle **réarrange** les éléments d'un ou deux registres — il ne calcule rien, il redistribue des valeurs déjà là. C'est la base du *swizzling* des langages de shader (`v.zyx` en GLSL/HLSL, exactement la même opération), et c'est ce qui rend possible le produit vectoriel (*cross product*) en SIMD — voir 3.4, où la formule et le rôle exact du shuffle `yzx` sont détaillés pas à pas.
 
 ## Gérer le « tail »
 
-Quand `n` n'est pas multiple de la largeur SIMD, il reste de 1 à `W-1` éléments. Les stratégies :
+Quand `n` n'est pas multiple de la largeur SIMD `W`, il reste de 1 à `W-1` éléments après la dernière itération SIMD complète — c'est le ***tail*** (la « queue »). Exemple concret avec `n = 13` et `W = 4` (SSE, 4 `float` par registre) :
 
-1. **Boucle scalaire** après la boucle SIMD : la plus simple, utilisée dans tous nos exemples.
-2. **Padding** : allouer les tableaux à un multiple de 4/8/16 et remplir avec des valeurs neutres. Solution préférée dans un moteur **qui contrôle ses données**.
-3. **Dernier bloc recouvrant** : retraiter les W derniers éléments. Valable si l'opération est idempotente (`min`, `max`, clamp in-place).
-4. **Masque AVX-512** : `_mm512_maskz_loadu_ps(mask, ptr)` ne lit (et ne peut crasher) que les éléments demandés.
+```
+indices :  0  1  2  3 | 4  5  6  7 | 8  9  10 11 | 12
+           \___________/\___________/\____________/  \_/
+             itération 0   itération 1   itération 2   tail (1 élément)
+             (4 éléments)  (4 éléments)  (4 éléments)
+```
+
+`13 / 4 = 3` reste `1` : trois itérations SIMD traitent les indices `0..11` (12 éléments), puis **il reste l'indice 12**, un seul élément — dans l'intervalle `[1, W-1] = [1, 3]` annoncé plus haut. Le code correspondant :
+
+```cpp
+size_t i = 0;
+for (; i + 4 <= n; i += 4) {                  // boucle SIMD : s'arrête dès qu'il reste < 4 éléments
+    __m128 v = _mm_loadu_ps(&data[i]);
+    // ... traitement ...
+}
+for (; i < n; ++i) {                          // tail scalaire : de 0 à W-1 = 3 tours, ici 1 seul (i=12)
+    // ... même traitement, élément par élément ...
+}
+```
+
+La condition `i + 4 <= n` (et non `i < n`) est ce qui garantit que la boucle SIMD ne lit **jamais** au-delà du tableau : dès qu'il reste moins de 4 éléments valides, elle s'arrête et laisse la boucle scalaire finir le travail un par un. Les stratégies possibles pour ce dernier bout :
+
+1. **Boucle scalaire** après la boucle SIMD (ci-dessus) : la plus simple, utilisée dans tous nos exemples.
+2. **Padding** : allouer les tableaux à un multiple de 4/8/16 (ici, `16` au lieu de `13`) et remplir les 3 éléments en trop avec des valeurs neutres (`0` pour une somme, `+∞` pour un minimum...). Plus besoin de code de tail du tout — la boucle SIMD traite tout, y compris le padding, dont le résultat est ignoré ou sans effet. Solution préférée dans un moteur **qui contrôle ses données** (buffers de particules, de vertex...).
+3. **Dernier bloc recouvrant** : au lieu d'un tail scalaire, retraiter les `W` derniers éléments avec **une itération SIMD de plus**, qui chevauche partiellement la précédente (ici, un 4e passage sur les indices `9..12` recouvre `9,10,11` déjà traités). Valable **seulement** si l'opération est idempotente (refaire `min`/`max`/`clamp` une 2e fois sur la même donnée ne change rien) — **faux** pour une somme ou un compteur, qui compteraient certains éléments deux fois.
+4. **Masque AVX-512** : `_mm512_maskz_loadu_ps(mask, ptr)` ne lit (et ne peut crasher) que les éléments désignés par le masque — un seul chemin de code pour la boucle complète ET le tail, voir l'exemple chiffré du benchmark en 3.5 (« tail masqué »).
 
 ## Réductions horizontales
 
@@ -371,7 +513,33 @@ unsigned bits = _mm_movemask_epi8(_mm_cmpeq_epi8(chunk, _mm_set1_epi8('\n')));
 count += std::popcount(bits);
 ```
 
-Pour tester un **intervalle** (`'a' <= c <= 'z'`) avec des comparaisons signées : `(c - 'a') + 0x80 < 26 + 0x80` (le biais de 0x80 transforme la comparaison signée en comparaison non signée).
+**Tester un intervalle** (`'a' <= c <= 'z'`) est un peu moins direct qu'il n'y paraît en SIMD sur des octets. Le test naturel serait « `c - 'a'` est un entier non signé inférieur à `26` » (26 lettres) : si `c` est bien une minuscule, `c - 'a'` tombe dans `[0, 25]` ✓ ; si `c` est **avant** `'a'` dans la table ASCII (par exemple `'0'` = 0x30), `c - 'a'` est négatif, et en non signé ça **déborde** vers une énorme valeur positive (`0x30 - 0x61 = -0x31`, soit `0xCF = 207` en octet non signé) — largement supérieure à 26, donc exclue à raison. Le test « non signé `< 26` » fonctionne exactement comme voulu.
+
+Le problème : **SSE ne fournit qu'une comparaison signée sur les octets**, `pcmpgtb` (`_mm_cmpgt_epi8`). Il n'existe pas de `pcmpgtub` pour du non signé. Si on compare `(uint8_t)(c - 'a')` avec une instruction **signée**, une valeur comme `207` (`0xCF`) est interprétée comme `-49` (complément à deux) — **négative**, donc `< 26` serait vrai à tort. Le test signé direct est donc **faux** dans ce cas précis.
+
+La correction : ajouter `0x80` (128) aux deux côtés de la comparaison avant de comparer en signé. Sur un octet, ajouter `0x80` a **exactement le même effet binaire** qu'inverser le bit de poids fort (`XOR 0x80`) — puisque `0x80` n'a que ce bit-là à 1, l'additionner ne peut pas produire de retenue vers les bits plus bas. Or inverser le bit de signe d'un octet est précisément la transformation qui fait correspondre l'**ordre non signé** de `[0, 255]` à l'**ordre signé** de `[-128, 127]` : `0` (le plus petit non signé) devient `-128` (le plus petit signé), `255` (le plus grand non signé) devient `127` (le plus grand signé), et l'ordre relatif de toutes les valeurs intermédiaires est préservé. Une comparaison **signée** après ce biais donne donc exactement le même résultat qu'une comparaison **non signée** sans biais — on simule une instruction qui n'existe pas avec celle qui existe :
+
+```
+(c - 'a') + 0x80 < 26 + 0x80
+```
+
+**Vérification avec deux exemples concrets** (`'a'` = 0x61) :
+
+```
+c = 'm' (0x6D, dans l'intervalle a-z) :
+  c - 'a' = 0x0C (12, déjà positif)
+  + 0x80  = 0x8C, interprété en signé  = -116
+  26 + 0x80 = 0x9A, interprété en signé = -102
+  -116 < -102 ?  OUI -> 'm' est accepté (correct : 'm' est bien entre 'a' et 'z')
+
+c = '0' (0x30, avant 'a' dans la table ASCII) :
+  c - 'a' = 0x30 - 0x61 = 0xCF (deborde, = -49 en signé, = 207 en non signé)
+  + 0x80  = 0xCF + 0x80 = 0x14F, tronqué sur 8 bits = 0x4F, interprété en signé = 79
+  26 + 0x80 = 0x9A, interprété en signé = -102
+  79 < -102 ?  NON -> '0' est rejeté (correct : '0' n'est pas entre 'a' et 'z')
+```
+
+Cette astuce est utilisée telle quelle dans des scanners SIMD réels (voir Wojciech Muła, [0x80.pl](http://0x80.pl/), en référence 3.12) : chaque fois qu'une extension SIMD ne propose qu'une comparaison signée là où le problème est naturellement non signé (fréquent sur les octets), le biais `+ 0x80` (ou `XOR 0x80`, strictement équivalent) permet de simuler l'instruction manquante sans passer par une boucle scalaire.
 
 ```
 --- compter les '\n' dans 64 Mo ---
@@ -387,6 +555,8 @@ SSE2                                         44.168 ms
 Deux leçons à retenir de ce benchmark. D'abord, sans autorisation explicite du jeu d'instructions, `std::popcount` peut redevenir un simple appel de fonction logiciel plutôt qu'un `popcnt` matériel : sur ce test, la version SSE2 compilée sans cette autorisation mettait **8,4 ms** au lieu de 2,2 ms. Toujours vérifier le code généré, jamais le supposer. Ensuite, le lexer SIMD ne gagne « que » 1,7x : les identifiants sont courts (souvent moins de 16 caractères), donc on sort vite de la boucle SIMD. **Le SIMD rapporte sur les longues séquences homogènes**, pas sur des données fragmentées.
 
 ## Denormals : un piège classique (audio, physique)
+
+**Pourquoi un problème de nombres flottants a sa place dans un chapitre SIMD** : les denormals et les NaN (ci-dessous) ne sont pas des curiosités mathématiques isolées — ce sont des comportements **matériels** de l'unité flottante qui interagissent directement avec tout ce qui précède dans ce chapitre. Un denormal ralentit **silencieusement** une boucle vectorisée entière (tout le registre `xmm`/`ymm` paye le chemin lent dès qu'**une seule** lane contient un denormal) : c'est un problème de **débit SIMD**, pas juste de précision numérique. Un NaN, lui, casse les **masques** et le *branchless* vus plus haut (une comparaison avec NaN ne se comporte pas comme attendu, donc un `select`/`clamp` écrit avec `min`/`max` peut laisser passer un NaN sans le vouloir) : c'est un problème de **correction** du code branchless, pas de vitesse. Les deux méritent donc d'être traités ici, pas relégués à un chapitre « flottants » séparé qui n'existe pas dans ce cours.
 
 [code/03_simd/denormals.cpp](https://github.com/johannphilippe/hardware_acceleration/blob/main/code/03_simd/denormals.cpp). Les nombres **subnormaux** (plus petits que `FLT_MIN` ≈ 1,17e-38) sont traités par des chemins lents du CPU (microcode). Ils apparaissent dès qu'un filtre, une réverbe ou un amortissement physique décroît vers zéro :
 
@@ -457,6 +627,29 @@ inline vec4 VECCALL cross3(vec4 a, vec4 b)
 // M * v = c0*x + c1*y + c2*z + c3*w   (matrice en 4 colonnes __m128)
 ```
 
+**Pourquoi le produit vectoriel a besoin d'un shuffle** : la définition mathématique de `cross(a,b)` est
+
+```
+cross.x = a.y*b.z - a.z*b.y
+cross.y = a.z*b.x - a.x*b.z
+cross.z = a.x*b.y - a.y*b.x
+```
+
+Chaque composante de sortie multiplie des composantes **différentes** de l'entrée — la sortie n'est pas un simple produit lane par lane comme `add`/`mul`. Une multiplication SIMD ordinaire (`_mm_mul_ps(a, b)`) ne calcule que `a.x*b.x, a.y*b.y, a.z*b.z, a.w*b.w` : rien de tout ça n'apparaît dans les formules ci-dessus. Il faut donc d'abord **réarranger** les lanes pour amener les bonnes valeurs en face les unes des autres, *puis* multiplier — c'est le rôle du shuffle `yzx` : il fait tourner les 3 composantes d'un cran, si bien que **chaque lane affiche la valeur de la composante suivante** dans le cycle `x → y → z → x` — la lane `x` du résultat affiche l'ancien `y`, la lane `y` affiche l'ancien `z`, la lane `z` affiche l'ancien `x`.
+
+Vérifions avec `a = (x=1, y=0, z=0)`, `b = (x=0, y=1, z=0)` (attendu : `cross(a,b) = (0,0,1)`) :
+
+```
+a     = (x=1, y=0, z=0)          b     = (x=0, y=1, z=0)
+a_yzx = (x=0, y=0, z=1)          b_yzx = (x=1, y=0, z=0)     -- x<-y, y<-z, z<-x, à partir de a et b ci-dessus
+
+a * b_yzx  = (1*1, 0*0, 0*0) = (x=1, y=0, z=0)
+a_yzx * b  = (0*0, 0*1, 1*0) = (x=0, y=0, z=0)
+c = (a*b_yzx) - (a_yzx*b)    = (x=1, y=0, z=0)
+```
+
+`c` contient déjà les 3 bonnes valeurs, mais **dans le mauvais ordre** : sa lane `x` vaut `a.x*b_yzx.x - a_yzx.x*b.x = a.x*b.y - a.y*b.x`, qui est en réalité la formule de `cross.z` (comparez avec les 3 formules ci-dessus) — pas de `cross.x`. Un dernier shuffle `yzx` sur `c` remet tout à sa place : `c_yzx = (x=old.y=0, y=old.z=0, z=old.x=1) = (0, 0, 1)` ✓, exactement `cross(a,b)` attendu. D'où les 3 shuffles de `cross3` : un sur chaque opérande d'entrée pour aligner les bonnes composantes avant la multiplication, un dernier sur le résultat pour corriger l'ordre. C'est exactement le même geste que le *swizzling* `v.zyx` d'un shader — sauf qu'ici il sert à calculer quelque chose, pas seulement à réordonner un affichage.
+
 - **`__vectorcall`** (MSVC) : passe les `__m128` dans les registres `xmm0`-`xmm5` au lieu de la pile. DirectXMath l'utilise via la macro `XM_CALLCONV`.
 - **Benchmark** : 1 M de `M * v` : scalaire 0,95 ms, SSE 0,76 ms. **Écart faible** : la version scalaire (4 × 4 multiplications de taille fixe) est **SLP-vectorisée** par le compilateur. Encore une preuve qu'il faut mesurer avant d'écrire du SIMD à la main.
 
@@ -493,13 +686,38 @@ Dans VS : *Project Properties → C/C++ → Code Generation → Enable Enhanced 
 
 **Bonne pratique MSVC** : mettre le code AVX2 dans un **`.cpp` séparé compilé avec `/arch:AVX2`** (propriété du fichier dans VS). Tout le code de ce fichier est alors VEX, l'auto-vectorisation y utilise AVX2, et on l'appelle via le dispatch (3.7).
 
+## Table de référence : ce qui change par rapport à SSE
+
+**La majorité des intrinsics SSE ont un équivalent AVX2 qui suit exactement le même nom**, juste avec `_mm256_` au lieu de `_mm_` (`_mm_add_ps` → `_mm256_add_ps`, `_mm_mul_ps` → `_mm256_mul_ps`, `_mm_cmpgt_ps` → `_mm256_cmp_ps` avec un prédicat en argument...). Ce qui mérite une attention particulière, ce sont les intrinsics **vraiment nouveaux** ou dont le comportement diffère :
+
+| Intrinsic AVX/AVX2 | Instruction MASM | Ce que ça fait |
+|---------------------|-------------------|-----------------|
+| `_mm256_broadcast_ss(ptr)` | `vbroadcastss` | diffuse **un seul** `float` depuis la mémoire dans les 8 lanes — plus direct que `set1` |
+| `_mm256_permute_ps(a, imm)` | `vpermilps` | comme `shuffle_ps`, mais **un seul opérande** et applicable indépendamment sur chaque lane de 128 bits |
+| `_mm256_permute2f128_ps(a, b, imm)` | `vperm2f128` | réarrange des **blocs de 128 bits entiers** entre `a` et `b` — un des rares moyens de traverser les deux lanes en SSE/AVX (pas AVX2) |
+| `_mm256_permutevar8x32_ps(a, idx)` (AVX2) | `vpermps` | permutation **arbitraire et indexée** des 8 éléments, **à travers les deux lanes** — celle qui manque le plus souvent quand on porte du code SSE vers AVX |
+| `_mm256_i32gather_ps(base, idx, scale)` (AVX2) | `vgatherdps` | charge 8 `float` à 8 adresses différentes (`base + idx[i]*scale`) — accès mémoire indirect, souvent plus lent que prévu (voir 3.2, limites de l'auto-vectorisation) |
+| `_mm256_fmadd_ps(a,b,c)` (AVX2+FMA) | `vfmadd213ps` (ou 132/231 selon l'ordre des opérandes) | `a*b + c` en une instruction, un seul arrondi (plus rapide **et** plus précis qu'un `mul` + `add` séparés — mais résultat différent, voir 3.2 sur le déterminisme) |
+| `_mm256_blendv_ps` | `vblendvps` | identique à SSE4.1, désormais standard en AVX |
+| `_mm256_zeroupper()` | `vzeroupper` | remet à zéro la moitié haute de tous les `ymm` — voir la pénalité de transition ci-dessous |
+| `_mm256_testz_ps(a, b)` | `vtestps` + `jz` | teste un masque et fixe les flags **directement**, sans passer par `movemask` puis comparer — utile pour un test « masque vide » rapide |
+
 ## La pénalité de transition SSE/AVX et `vzeroupper`
 
 Mélanger des instructions SSE « legacy » (non VEX) avec des registres `ymm` dont la moitié haute est « sale » provoque, selon les CPU, une pénalité (sauvegarde et restauration de l'état, ou fausse dépendance). La règle : **appeler `_mm256_zeroupper()` avant de retourner vers du code SSE**. Les compilateurs l'ajoutent automatiquement dans le code compilé en AVX, mais pas forcément dans du code intrinsics compilé sans `/arch:AVX`.
 
 ## Les *lanes* : le piège d'AVX
 
-La plupart des opérations 256 bits sont en réalité **deux opérations 128 bits côte à côte** (deux *lanes*) :
+**L'idée reçue dangereuse** : penser qu'un `ymm` de 256 bits est « comme un `xmm` de 128 bits, mais deux fois plus large », et que le code qui manipule ses 8 éléments se comporte comme s'il n'y en avait qu'un seul bloc continu. C'est faux pour une bonne partie des instructions : électriquement, beaucoup d'unités d'exécution AVX sont construites comme **deux unités 128 bits accolées**, chacune ne « voyant » que sa propre moitié du registre. Un `ymm` se comporte alors comme **deux `xmm` indépendants côte à côte**, chacun une *lane* :
+
+```
+                     lane basse (128 bits)          lane haute (128 bits)
+ymm  = [    élément 0  1  2  3    |    élément 4  5  6  7    ]
+         \______________________/    \______________________/
+              lane 0 (comme un xmm)      lane 1 (comme un xmm)
+```
+
+Les opérations **arithmétiques** (`vaddps`, `vmulps`...) ne posent aucun problème : `+`, `*`, `min`, `max` sont appliqués élément par élément, la frontière entre lanes n'a aucune importance puisque chaque lane ne dépend que de ses propres éléments. Le piège concerne les opérations qui **redistribuent** des éléments — shuffle, unpack, permute — où la frontière devient très visible :
 
 ```
 a = [ 0  1  2  3 |  4  5  6  7 ]      b = [ 10 11 12 13 | 14 15 16 17 ]
@@ -509,7 +727,9 @@ _mm256_shuffle_ps(a, b, (1,0,3,2))  = [ 2  3 10 11 |  6  7 14 15 ]   <- le masqu
 _mm256_permutevar8x32_ps(a, 7..0)   = [ 7  6  5  4 |  3  2  1  0 ]   <- AVX2 : traverse les lanes
 ```
 
-(Sortie vérifiée.) Tout code SSE « porté » naïvement en AVX en changeant `_mm_` en `_mm256_` est **faux** dès qu'il utilise `unpack` ou `shuffle`.
+(Sortie vérifiée.) Sur `_mm256_unpacklo_ps(a, b)`, l'intuition « entrelacer tout le tableau » donnerait `[0 10 1 11 2 12 3 13]` — mais l'instruction traite `[0 1 2 3]`/`[10 11 12 13]` (lane basse) et `[4 5 6 7]`/`[14 15 16 17]` (lane haute) **séparément**, donnant deux entrelacements indépendants de 4 éléments chacun : `[0 10 1 11]` puis `[4 14 5 15]`. Même chose pour `_mm256_shuffle_ps` : le masque `_MM_SHUFFLE` s'applique **identiquement aux deux lanes**, il ne peut pas faire venir un élément de la lane haute dans la lane basse. Tout code SSE « porté » naïvement en AVX en changeant `_mm_` en `_mm256_` est donc **faux** dès qu'il utilise `unpack` ou `shuffle` — le résultat compile, tourne, ne crashe pas, et donne simplement le mauvais nombre.
+
+**Comment traverser les lanes quand c'est nécessaire** : seules certaines instructions le permettent, et il faut les demander explicitement (tableau ci-dessus) — `_mm256_permutevar8x32_ps`/`vpermps` (AVX2, indexation arbitraire sur les 8 éléments), `_mm256_permute2f128_ps`/`vperm2f128` (échanger des blocs de 128 bits entiers entre deux registres), ou, pour une réduction horizontale sur les 8 éléments (par exemple une somme complète d'un `__m256`), le geste classique consiste à **rabattre** la lane haute sur la lane basse avec `_mm256_extractf128_ps` (extraire les 128 bits hauts dans un `__m128`), additionner ce résultat avec la lane basse (`_mm256_castps256_ps128`), puis terminer avec la réduction horizontale SSE déjà vue plus haut (`movehl` + `shuffle`) — on retombe sur du 128 bits classique pour la toute dernière étape.
 
 ## Benchmarks : [code/03_simd/bench_kernels.cpp](https://github.com/johannphilippe/hardware_acceleration/blob/main/code/03_simd/bench_kernels.cpp)
 
@@ -538,7 +758,22 @@ AVX-512 mask + popcount                       0.733 ms
 
 **Trois lectures à en tirer** :
 
-- **Somme x18 avec AVX2 (> 8 !)** : la somme scalaire est limitée par la **latence** de l'addition flottante. Chaque `addss` attend le résultat du précédent (~3-4 cycles), et le CPU ne peut pas paralléliser cette chaîne. Avec 4 accumulateurs indépendants, l'exécution *out-of-order* travaille sur 4 chaînes en parallèle. AVX-512 avec **un seul** accumulateur est plus lent que AVX2 avec 4. **La largeur ne fait pas tout : la structure du calcul compte.**
+- **Somme x18 avec AVX2 (> 8 !)** : la somme scalaire est limitée par la **latence** de l'addition flottante. Chaque `addss` attend le résultat du précédent (~3-4 cycles), et le CPU ne peut pas paralléliser cette chaîne : `s = s + x[0]`, puis `s = s + x[1]` dépend du résultat de la ligne précédente, etc. — une seule longue chaîne de dépendances, quelle que soit la largeur du registre utilisé. **4 accumulateurs indépendants** cassent cette chaîne :
+
+  ```cpp
+  __m256 acc0 = _mm256_setzero_ps(), acc1 = acc0, acc2 = acc0, acc3 = acc0;
+  for (; i + 32 <= n; i += 32) {
+      acc0 = _mm256_add_ps(acc0, _mm256_loadu_ps(&x[i]));       // 4 chaînes de dépendances
+      acc1 = _mm256_add_ps(acc1, _mm256_loadu_ps(&x[i + 8]));   // INDÉPENDANTES : le CPU
+      acc2 = _mm256_add_ps(acc2, _mm256_loadu_ps(&x[i + 16]));  // out-of-order peut les
+      acc3 = _mm256_add_ps(acc3, _mm256_loadu_ps(&x[i + 24]));  // exécuter en même temps
+  }
+  __m256 sum = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));  // fusion finale
+  ```
+
+  `acc0` ne dépend jamais de `acc1`/`acc2`/`acc3` : le CPU *out-of-order* peut faire progresser les 4 chaînes **en parallèle**, en profitant du fait qu'il a plusieurs unités d'exécution flottantes disponibles à chaque cycle. Résultat : le débit n'est plus limité par la latence d'une seule chaîne, mais par le **débit** (throughput) du CPU — d'où un gain qui dépasse le simple facteur de largeur (x8 attendu pour AVX2 sur des `float`, x18 mesuré, parce que la version scalaire elle-même était limitée par la latence, pas seulement plus étroite). AVX-512 avec **un seul** accumulateur est plus lent que AVX2 avec 4 : la largeur du registre ne compense pas une chaîne de dépendance non brisée. **La largeur ne fait pas tout : la structure du calcul compte.**
+
+  **« Tail masqué » (ligne AVX-512)** : `1 048 579` n'est pas un multiple de 16 (largeur d'un `zmm` en `float`). Plutôt que de séparer une boucle SIMD + une boucle scalaire pour les 3 derniers éléments (stratégie 1 de « Gérer le tail » plus haut), la version AVX-512 calcule un masque `__mmask16` qui n'a que les 3 bits correspondant aux éléments restants activés, et fait `_mm512_maskz_loadu_ps(mask, ptr)` : **une seule** instruction charge (et additionne) exactement les éléments valides, zéro pour le reste — pas de deuxième boucle, pas de risque de lire hors tableau. C'est la stratégie 4 de « Gérer le tail », appliquée ici en vrai.
 - **saxpy : SSE ≈ AVX2**. Deux tableaux de 4 Mo lus et un écrit : c'est la RAM qui limite. Retour à la partie 1.
 - **clamp x22** : c'est surtout la suppression des branches imprévisibles qui paye, pas la largeur.
 
@@ -637,6 +872,15 @@ stdx::native_simd<float> a([](int i) { return float(i); });
 auto b = a * 2.0f + 1.0f;               // opérateurs naturels, largeur choisie selon la cible
 float s = stdx::reduce(b);
 ```
+
+**Décortiquons ces 4 lignes**, car la syntaxe cache beaucoup de mécanique :
+
+- `stdx::native_simd<float>` est un **type dont la largeur n'est pas fixée par le code**, mais par les options de compilation cibles : sur une machine compilée `-msse2` (128 bits), `native_simd<float>` contient 4 `float` (l'équivalent d'un `__m128` derrière le rideau) ; compilé `-mavx2`, il en contient 8 (comme un `__m256`) ; `-mavx512f`, 16. **Le même code source** produit un binaire différent selon la cible, sans qu'aucune ligne ne change — c'est tout l'intérêt face à `__m128`/`__m256` qui figent la largeur dans le type lui-même.
+- `stdx::native_simd<float> a([](int i) { return float(i); })` est un **constructeur générateur** : la lambda est appelée une fois par lane, avec son indice `i`, pour produire la valeur initiale de cette lane. Avec une largeur de 4 (SSE), ça construit `a = [0.0, 1.0, 2.0, 3.0]` — équivalent de `_mm_setr_ps(0,1,2,3)` écrit à la main, mais qui s'adapterait tout seul à une largeur de 8 en AVX2 (`a = [0,1,2,3,4,5,6,7]`).
+- `auto b = a * 2.0f + 1.0f;` : les opérateurs `*` et `+` sont surchargés pour agir **lane par lane**, exactement comme `_mm_mul_ps`/`_mm_add_ps`, mais avec la syntaxe naturelle du C++ au lieu d'appeler des intrinsics. Avec `a = [0,1,2,3]` (largeur 4) : `b = [1.0, 3.0, 5.0, 7.0]`.
+- `stdx::reduce(b)` fait la **réduction horizontale** (la somme de toutes les lanes) — exactement ce que le code fait à la main plus haut (`movehl` + `shuffle` + `add`), mais implémenté une fois pour toutes dans la bibliothèque, avec la meilleure séquence d'instructions connue pour la cible. Avec `b = [1,3,5,7]` : `s = 1+3+5+7 = 16.0f`.
+
+En clair : `std::experimental::simd` fait exactement ce que fait ce chapitre à la main (charger/construire un vecteur, l'opérer, le réduire), mais avec une largeur **portable** choisie automatiquement, et sans jamais écrire `_mm_` explicitement. C'est la direction que prend le C++ standard (P1928, C++26) — mais pas encore disponible dans la STL MSVC au moment d'écrire ce cours, d'où son statut de « pour la culture » ici.
 
 ---
 
